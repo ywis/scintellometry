@@ -147,7 +147,7 @@ gbt.zamax = 80.*u.deg  # guess
 aro = Observatory(-(78*u.deg+04*u.arcmin+22.95*u.arcsec),
                   45*u.deg+57*u.arcmin+19.81*u.arcsec, 'ARO')
 aro.zamax = 85.*u.deg  # guess
-lofar = Observatory(-(6*u.deg+52*u.arcmin+8.18*u.arcsec),
+lofar = Observatory(6*u.deg+52*u.arcmin+8.18*u.arcsec,
                     52*u.deg+54*u.arcmin+31.55*u.arcsec, 'LOFAR')
 lofar.zamax = 60.*u.degree  # guess, gives factor 2 loss in collecting area
 effelsberg = Observatory(6*u.deg+52*u.arcmin+58*u.arcsec,
