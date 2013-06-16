@@ -1,8 +1,10 @@
+from __future__ import division
+
 import numpy as np
 
 # to compile fortran source, go to scintellometry/folding and run
-# f2py --fcompiler=gfortran -m read_gmrt -c fortran/read_gmrt.f90
-import read_gmrt
+# f2py --fcompiler=gfortran -m read_gmrt2 -c fortran/read_gmrt2.f90
+import fold
 import pmap
 
 
@@ -17,7 +19,7 @@ if __name__ == '__main__':
                     1337.21932367595014])
     gates = np.zeros((4,4))
     gates[1] = [59,60,61,62]
-    gates[2] = [1,16,1,8]
+    gates[2] = [1,8,9,16]
     gates[3] = [224,226,227,231]
 
     # Fiddle with DM of 1957
@@ -25,7 +27,9 @@ if __name__ == '__main__':
     # select pulsar
     psr = psrname[ipsr]
     dm = dm0[ipsr]
-    p0 = p00[ipsr]
+    t0 = -p00[ipsr]/3.
+    f0 = 622.1678503154773  # 1./p00[ipsr]
+    f1 = 1.45706137397e-06/2.  # 0.
     igate = gates[ipsr]
     fndir1 = '/mnt/raid-project/gmrt/pen/B1937/1957+20/b'
 
@@ -35,22 +39,28 @@ if __name__ == '__main__':
     nhead = 0*32*1024*1024
     nblock = 512  # frequency samples in a block; every sample is two bytes: real, imag
     # nt=45 for 1508, 180 for 0809 and 156 for 0531
-    nt = 1024/2*8*2/128  # number of sets to fold  -> /128 for quick try
-    ntint = 1024*32*1024/(nblock*2)/4  # total # of blocks per set
-    ngate = 32/2  # number of bins over the pulsar period
+    nt = 1024//2*8*2  # number of sets to fold  -> //128 for quick try
+    ntint = 1024*32*1024//(nblock*2)//4  # total # of blocks per set
+    ngate = 32//2  # number of bins over the pulsar period
     ntbin = 16*1  # number of bins the time series is split into for folding
     ntw = min(10000, nt*ntint)  # number of samples to combine for waterfall
 
     samplerate = 33333955.033217516*2
 
+    # for comparison with fortran routines, which have a bug in calculating
+    # sample time
+    t0 -= 2*nblock/samplerate
+
     fbottom = 306.   # MHz
     fband = 2*16.6666666  # MHz
 
     verbose = True
-    foldspec2, waterfall = read_gmrt.fold(nhead, nblock, nt, ntint,
-                                          ngate, ntbin, ntw,
-                                          dm, p0, file1, file2, samplerate,
-                                          fbottom, fband, verbose)
+    foldspec2, waterfall = fold.fold(nhead, nblock, nt, ntint,
+                                     ngate, ntbin, ntw,
+                                     dm, t0, f0, f1, 
+                                     file1, file2, samplerate,
+                                     fbottom, fband, do_waterfall=False,
+                                     verbose=verbose)
     foldspec1 = foldspec2.sum(axis=2)
     fluxes = foldspec1.sum(axis=0)
     foldspec3 = foldspec2.sum(axis=0)
@@ -66,7 +76,7 @@ if __name__ == '__main__':
     f.close()
     plots = True
     if plots:
-        pmap.pmap('waterfall.pgm', waterfall, 2, verbose=True)
+        # pmap.pmap('waterfall.pgm', waterfall, 2, verbose=True)
         pmap.pmap('folded'+psr+'.pgm', foldspec1, 1, verbose)
         pmap.pmap('foldedbin'+psr+'.pgm', foldspec2.reshape(nblock,-1),
                   2, verbose)

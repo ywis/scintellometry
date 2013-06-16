@@ -72,8 +72,9 @@ do j=1,nt
       !      sqrt(sum(abs(cbufx)**2)*sum(abs(cbufold)**2))
       cbufold=cbufx
 !      write(*,*) iw0,nt*ntint/ntw
-      if( iw0>nt*ntint/ntw) cycle
-      waterfall(:,iw0)=waterfall(:,iw0)+abs(cbufx)**2
+      if( iw0 .le. nt*ntint/ntw) then
+         waterfall(:,iw0) = waterfall(:,iw0) + abs(cbufx)**2
+      endif
 !$omp parallel do default(none) private(freq,dt,t,iphase) shared(t0,p0,dm,foldspec,cbufx,icount,ibin,i,samplerate)
       do if=1,nblock
          freq=306.d0+2*16.6666666d0*if/nblock

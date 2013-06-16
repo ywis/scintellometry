@@ -13,11 +13,13 @@ subroutine fold(nhead, nblock, nt, ntint, ngate, ntbin, ntw, &
   complex :: cbufx(nblock), cbufold(nblock)
   real :: foldspec(nblock, ngate)
   integer ::icount(nblock, ngate)
-  real*8 :: t0, t, dt, t1, freq
+  real*8 :: t, dt, tj, freq
   integer :: i, j, if, ibin, iresid, iw, iw0, iphase, nt1
 
-  open(10, file=file1, status='old', form='unformatted', access='stream')
-  open(11, file=file2, status='old', form='unformatted', access='stream')
+  open(10, file=file1, status='old', action='read', &
+       form='unformatted', access='stream')
+  open(11, file=file2, status='old', action='read', &
+       form='unformatted', access='stream')
 
   if(nhead .gt. 0) then
      print*, 'Skipping ', nhead, 'bytes'
@@ -31,14 +33,13 @@ subroutine fold(nhead, nblock, nt, ntint, ngate, ntbin, ntw, &
   cbufold = 0
   do j = 1, nt
      ! equivalent time since start
-     t1 = (j-1)*2*nblock*(ntint/samplerate)
+     tj = (j-1)*2*nblock*(ntint/samplerate)
      if (verbose .and. mod(j,100) .eq. 0)then
-        print 90, j, nt, t1
+        print 90, j, nt, tj
 90      format('Doing=',i6,'/',i6,'; time=', g18.12)
      end if
-     t0 = t1
-     ibin = (j-1)*ntbin/nt+1
-     iresid = mod(j, nt/ntbin)
+     ibin = (j-1)*ntbin/nt+1  ! bin in the time series: 1..ntbin
+     iresid = mod(j, nt/ntbin) ! 0 if the last sample of a bin
      do i = 1, ntint
         raw4 = 0
         if (mod(j,16) .lt. 8*1) then
@@ -50,8 +51,8 @@ subroutine fold(nhead, nblock, nt, ntint, ngate, ntbin, ntw, &
         else
            cycle
         end if
-        iw = (j-1)*(ntint)+i-1
-        iw0 = iw/ntw+1
+        iw = (j-1)*ntint + i-1  ! block counter, starting at 0
+        iw0 = iw/ntw+1          ! offset in waterfall, 1...ntw
         cbufx = cmplx(raw4(1,:)*1.,raw4(2,:)*1.)
         if (mod(i,2) .eq. 0) cbufx = cbufx-cbufold
         ! if (mod(i,2) .eq. 0 .and. mod(j,16) .eq. 1 .and. i .eq. 2) &
@@ -59,13 +60,14 @@ subroutine fold(nhead, nblock, nt, ntint, ngate, ntbin, ntw, &
         !                sqrt(sum(abs(cbufx)**2)*sum(abs(cbufold)**2))
         cbufold = cbufx
         !  write(*,*) iw0,nt*ntint/ntw
-        if( iw0 .gt. nt*ntint/ntw) cycle
-        waterfall(:,iw0) = waterfall(:,iw0) + abs(cbufx)**2
+        if( iw0 .le. nt*ntint/ntw) then
+           waterfall(:,iw0) = waterfall(:,iw0) + abs(cbufx)**2
+        endif
         !$omp parallel do default(none) private(freq,dt,t,iphase) shared(t0,p0,dm,foldspec,cbufx,icount,ibin,i,samplerate)
         do if = 1,nblock
            freq = fbottom + fband*if/nblock
            dt = 4149.d0 * dm * (1.d0/freq**2 - 1.d0/fbottom**2)
-           t = t0 + i*(2*nblock)/samplerate - dt + p0/3
+           t = tj + i*(2*nblock)/samplerate - dt + p0/3
            iphase = int(ngate*t/p0)
            iphase = mod(iphase+4000000*ngate, ngate)+1
            foldspec(if, iphase) = foldspec(if, iphase) + abs(cbufx(if))**2

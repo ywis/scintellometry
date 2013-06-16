@@ -1,8 +1,8 @@
 import numpy as np
 
 # to compile fortran source, go to scintellometry/folding and run
-# f2py --fcompiler=gfortran -m read_gmrt -c fortran/read_gmrt.f90
-import read_gmrt
+# f2py --fcompiler=gfortran -m read_gmrt2 -c fortran/read_gmrt2.f90
+import read_gmrt2
 import pmap
 
 
@@ -25,7 +25,9 @@ if __name__ == '__main__':
     # select pulsar
     psr = psrname[ipsr]
     dm = dm0[ipsr]
-    p0 = p00[ipsr]
+    t0 = -p00[ipsr]/3.
+    f0 = 1./p00[ipsr]
+    f1 = 0.
     igate = gates[ipsr]
     fndir1 = '/mnt/raid-project/gmrt/pen/B1937/1957+20/b'
 
@@ -47,10 +49,11 @@ if __name__ == '__main__':
     fband = 2*16.6666666  # MHz
 
     verbose = True
-    foldspec2, waterfall = read_gmrt.fold(nhead, nblock, nt, ntint,
-                                          ngate, ntbin, ntw,
-                                          dm, p0, file1, file2, samplerate,
-                                          fbottom, fband, verbose)
+    foldspec2, waterfall = read_gmrt2.fold(nhead, nblock, nt, ntint,
+                                           ngate, ntbin, ntw,
+                                           dm, t0, f0, f1, 
+                                           file1, file2, samplerate,
+                                           fbottom, fband, verbose=verbose)
     foldspec1 = foldspec2.sum(axis=2)
     fluxes = foldspec1.sum(axis=0)
     foldspec3 = foldspec2.sum(axis=0)
