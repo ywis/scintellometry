@@ -1,11 +1,11 @@
 from __future__ import division
 
 import numpy as np
-
+from numpy.polynomial import Polynomial
 # to compile fortran source, go to scintellometry/folding and run
 # f2py --fcompiler=gfortran -m read_gmrt2 -c fortran/read_gmrt2.f90
-import fold
-import pmap
+from fold import fold
+from pmap import pmap
 
 
 if __name__ == '__main__':
@@ -30,6 +30,7 @@ if __name__ == '__main__':
     t0 = -p00[ipsr]/3.
     f0 = 622.1678503154773  # 1./p00[ipsr]
     f1 = 1.45706137397e-06/2.  # 0.
+    phasepol = Polynomial([f0, f1]).integ(1, 0., t0)
     igate = gates[ipsr]
     fndir1 = '/mnt/raid-project/gmrt/pen/B1937/1957+20/b'
 
@@ -37,7 +38,8 @@ if __name__ == '__main__':
     file2 = fndir1 + psr + '_pa.raw0.Pol-L2.dat'
 
     nhead = 0*32*1024*1024
-    nblock = 512  # frequency samples in a block; every sample is two bytes: real, imag
+    # frequency samples in a block; every sample is two bytes: real, imag
+    nblock = 512
     # nt=45 for 1508, 180 for 0809 and 156 for 0531
     nt = 1024//2*8*2  # number of sets to fold  -> //128 for quick try
     ntint = 1024*32*1024//(nblock*2)//4  # total # of blocks per set
@@ -55,12 +57,12 @@ if __name__ == '__main__':
     fband = 2*16.6666666  # MHz
 
     verbose = True
-    foldspec2, waterfall = fold.fold(nhead, nblock, nt, ntint,
-                                     ngate, ntbin, ntw,
-                                     dm, t0, f0, f1, 
-                                     file1, file2, samplerate,
-                                     fbottom, fband, do_waterfall=False,
-                                     verbose=verbose)
+    foldspec2, waterfall = fold(file1, file2, samplerate,
+                                fbottom, fband, nblock, nt, ntint,
+                                nhead, ngate, ntbin, ntw,
+                                dm, phasepol,
+                                do_waterfall=False,
+                                verbose=verbose)
     foldspec1 = foldspec2.sum(axis=2)
     fluxes = foldspec1.sum(axis=0)
     foldspec3 = foldspec2.sum(axis=0)
@@ -76,11 +78,10 @@ if __name__ == '__main__':
     f.close()
     plots = True
     if plots:
-        # pmap.pmap('waterfall.pgm', waterfall, 2, verbose=True)
-        pmap.pmap('folded'+psr+'.pgm', foldspec1, 1, verbose)
-        pmap.pmap('foldedbin'+psr+'.pgm', foldspec2.reshape(nblock,-1),
-                  2, verbose)
-        pmap.pmap('folded3'+psr+'.pgm', foldspec3, 1, verbose)
+        # pmap('waterfall.pgm', waterfall, 1, verbose=True)
+        pmap('folded'+psr+'.pgm', foldspec1, 0, verbose)
+        pmap('foldedbin'+psr+'.pgm', foldspec2.reshape(nblock,-1), 1, verbose)
+        pmap('folded3'+psr+'.pgm', foldspec3, 0, verbose)
         # open(10,file='dynspect'//psr//'.bin',form='unformatted')
         # write(10) dynspect
         # write(10) dynspect2
@@ -89,9 +90,9 @@ if __name__ == '__main__':
         dall_sum0 = np.where(dall_sum0, dall_sum0, 1.)
         dall = dall/(dall_sum0/nblock)
         dall[0,:] = 0
-        pmap.pmap('dynspect'+psr+'.pgm', dall, 1, verbose)
+        pmap('dynspect'+psr+'.pgm', dall, 0, verbose)
         t1 = dynspect/(dynspect.sum(axis=0)/nblock)
         t2 = dynspect2/(dynspect2.sum(axis=0)/nblock)
         dsub = t1-t2
         dsub[0,:] = 0
-        pmap.pmap('dynspectdiff'+psr+'.pgm', dsub, 1, verbose)
+        pmap('dynspectdiff'+psr+'.pgm', dsub, 0, verbose)

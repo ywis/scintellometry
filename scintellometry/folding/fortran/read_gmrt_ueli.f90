@@ -54,7 +54,7 @@ do j=1,nt
    iresid=mod(j,nt/ntbin)
    do i=1,ntint
       raw4=0
-      if (mod(j,16)<8*1) then
+      if (mod(j-1,16)<8*1) then
          if (i .le. ntint/2) then
             read(10,end=100) raw4
          else
@@ -77,9 +77,9 @@ do j=1,nt
       endif
 !$omp parallel do default(none) private(freq,dt,t,iphase) shared(t0,p0,dm,foldspec,cbufx,icount,ibin,i,samplerate)
       do if=1,nblock
-         freq=306.d0+2*16.6666666d0*if/nblock
+         freq=306.d0+2*16.6666666d0*(if-0.5d0)/nblock
          dt=4149*dm/freq**2-4149*dm/306d0**2
-         t=t0+i*(2*nblock)/samplerate-dt+p0/3
+         t=t0+(i-1)*(2*nblock)/samplerate-dt+p0/3
          iphase=(ngate*t/p0)
          iphase=mod(iphase+4000000*ngate,ngate)+1
          foldspec(if,iphase)=foldspec(if,iphase)+abs(cbufx(if))**2
