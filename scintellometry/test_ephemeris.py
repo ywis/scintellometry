@@ -9,7 +9,7 @@ import observability
 
 
 if __name__ == '__main__':
-    eph1957 = ELL1Ephemeris('psrj1959.par')
+    eph1957 = ELL1Ephemeris('timing/ForMarten.par')
     jpleph = JPLEphemeris(de421)
     mjd = Time('2012-02-20', scale='utc').mjd+np.linspace(0.,400.,1001)
     mjd = Time('2013-05-16 23:47', scale='utc').mjd+np.linspace(0.,0.1, 101)
