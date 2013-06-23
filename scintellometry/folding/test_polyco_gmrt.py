@@ -4,7 +4,7 @@ import numpy as np
 from numpy.polynomial import Polynomial
 # to compile fortran source, go to scintellometry/folding and run
 # f2py --fcompiler=gfortran -m read_gmrt2 -c fortran/read_gmrt2.f90
-from fold import fold
+from fold_gmrt import fold
 from pmap import pmap
 
 
@@ -27,16 +27,18 @@ if __name__ == '__main__':
     # select pulsar
     psr = psrname[ipsr]
     dm = dm0[ipsr]
-    polyco = np.array([0.89445372020383995,
-                       37329.532088339118,
-                       0.002514254791367953,
-                       9.2233535227755351e-06,
-                       -2.7654363721954842e-08])
-    window = np.array([-60., 60.])  # range for which polyco is defined
-    # polyco is for 00:30 UTC midtime, while obs starts at 23:47;
-    # but get good fit to frequency at known sample rate at 23:50:08.849
-    domain = (window-(43.+22/60.)+90.)*60.
-    phasepol = Polynomial(polyco, domain, window)
+    polyco = np.array([2.886811413399382846012297676452e-04,
+                       2.210361204015489855912585115405e+00,
+                       2.514254791367953018110258686484e-03,
+                       9.223353522775534424476686763504e-06,
+                       -2.765436372195484207847659657957e-08])
+    # polyco is for times in minutes; convert to seconds
+    polyco = polyco/60.**(np.arange(len(polyco)))
+    polyco[0] += 277841929405.894161015748978  # add ref phase
+    polyco[1] += 622.12202878558525409591      # add reference frequency
+    t0 = -43.*60  # polyco is for 00:30 UTC midtime, while obs starts at 23:47
+    window = np.array([-3600., 3600.])  # range for which polyco is defined
+    phasepol = Polynomial(polyco, window-t0, window)
 
     igate = gates[ipsr]
     fndir1 = '/mnt/raid-project/gmrt/pen/B1937/1957+20/b'
@@ -54,18 +56,23 @@ if __name__ == '__main__':
     ntbin = 16*1  # number of bins the time series is split into for folding
     ntw = min(10000, nt*ntint)  # number of samples to combine for waterfall
 
-    samplerate = 100.e6/3. * 2  #* (1.+2./16/622.156270897/1100)
+    samplerate = 100.e6/3. * 2 * (1.+2./16/622.156270897/1100)
+
+    # for comparison with fortran routines, which have a bug in calculating
+    # sample time
+    t0 -= 2*nblock/samplerate
 
     fbottom = 306.   # MHz
     fband = 2*16.6666666  # MHz
 
     verbose = True
-    foldspec2, waterfall = fold(file1, file2, samplerate,
+    foldspec2, waterfall = fold(file1, file2, np.int8, samplerate,
                                 fbottom, fband, nblock, nt, ntint,
                                 nhead, ngate, ntbin, ntw,
-                                dm, phasepol,
+                                dm, phasepol, half_data_bug=True,
+                                paired_samples_bug=True,
                                 do_waterfall=False,
-                                verbose=verbose)
+                                verbose=verbose, progress_interval=10)
     foldspec1 = foldspec2.sum(axis=2)
     fluxes = foldspec1.sum(axis=0)
     foldspec3 = foldspec2.sum(axis=0)
