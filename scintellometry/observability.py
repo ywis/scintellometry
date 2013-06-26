@@ -146,7 +146,7 @@ gbt = Observatory(-(79*u.deg+50*u.arcmin+23*u.arcsec),
 gbt.zamax = 80.*u.deg  # guess
 aro = Observatory(-(78*u.deg+04*u.arcmin+22.95*u.arcsec),
                   45*u.deg+57*u.arcmin+19.81*u.arcsec, 'ARO')
-aro.zamax = 85.*u.deg  # guess
+aro.zamax = 80.*u.deg  # guess
 lofar = Observatory(6*u.deg+52*u.arcmin+8.18*u.arcsec,
                     52*u.deg+54*u.arcmin+31.55*u.arcsec, 'LOFAR')
 lofar.zamax = 60.*u.degree  # guess, gives factor 2 loss in collecting area
@@ -205,10 +205,10 @@ if __name__ == '__main__':
                                      np.mod(gmststop,24.)))
 
             # get corresponding orbital phases for a range of dates
-            #ist_date1 = '2013-06-16 12:00:00'
-            #ist_date2 = '2013-07-03 12:00:00'
-            ist_date1 = '2013-07-24 12:00:00'
-            ist_date2 = '2013-08-08 12:00:00'
+            ist_date1 = '2013-06-16 12:00:00'
+            ist_date2 = '2013-07-03 12:00:00'
+            #ist_date1 = '2013-07-24 12:00:00'
+            #ist_date2 = '2013-08-08 12:00:00'
             ist_utc = 5.5/24.
             mjd1 = Time(ist_date1, scale='utc').mjd-ist_utc
             mjd2 = Time(ist_date2, scale='utc').mjd-ist_utc

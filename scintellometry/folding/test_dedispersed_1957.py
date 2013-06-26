@@ -4,7 +4,7 @@ import numpy as np
 from numpy.polynomial import Polynomial
 # to compile fortran source, go to scintellometry/folding and run
 # f2py --fcompiler=gfortran -m fortran_fold_gmrt -c fortran/fold_gmrt.f90
-from fold_gmrt import fold
+from fortran_fold_gmrt import fold
 from pmap import pmap
 
 
@@ -26,18 +26,16 @@ if __name__ == '__main__':
     dm0[2] *= 1.001
     # select pulsar
     psr = psrname[ipsr]
-    dm = 29.121390086960949536-29.1168*1.001
-    polyco = np.array([2.886811413399382846012297676452e-04,
-                       2.210361204015489855912585115405e+00,
-                       2.514254791367953018110258686484e-03,
-                       9.223353522775534424476686763504e-06,
-                       -2.765436372195484207847659657957e-08])
-    polyco[0] += 277841929405.894161015748978  # add ref phase
-    polyco[1] += 622.12202878558525409591      # add reference frequency
+    dm = 0.
+    polyco = np.array([0.89445372020383995,
+                       37329.532088339118,
+                       0.002514254791367953,
+                       9.2233535227755351e-06,
+                       -2.7654363721954842e-08])
     window = np.array([-60., 60.])  # range for which polyco is defined
     # polyco is for 00:30 UTC midtime, while obs starts at 23:47;
-    # also convert from seconds to minutes
-    domain = (window-43.)*60.
+    # but get good fit to frequency at known sample rate at 23:50:08.849
+    domain = (window-(43.+22/60.)+90.)*60.
     phasepol = Polynomial(polyco, domain, window)
 
     igate = None
@@ -60,7 +58,6 @@ if __name__ == '__main__':
     # from /mnt/raid-project/gmrt/pen/B1937/read_float.f90
     # phasepol = Polynomial([0.,1./(1.60731438719155/1000*(1-4*3.252e-07))])
     samplerate = 33333333.*2
-    dm = 0.
 
     fbottom = 306.   # MHz
     fband = 2*16.6666666  # MHz
@@ -71,7 +68,7 @@ if __name__ == '__main__':
     foldspec2, waterfall = fold(file1, file2, 'f4', samplerate,
                                 fbottom, fband, nblock, nt, ntint,
                                 nhead, ngate, ntbin, ntw,
-                                dm, phasepol, half_data_bug=True,
+                                dm, phasepol.coef, half_data_bug=True,
                                 paired_samples_bug=False,
                                 do_foldspec=do_foldspec,
                                 do_waterfall=do_waterfall,
