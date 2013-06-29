@@ -87,6 +87,16 @@ class Observatory(dict):
                 haversin(ha.to(u.radian).value))
         return (archaversin(hsth) * u.radian).to(u.degree)
 
+    def ha2az(self, ha, d):
+	y = (np.sin(d.to(u.radian).value) *
+             np.cos(self['l'].to(u.radian).value) -
+             np.cos(d.to(u.radian).value) *
+             np.cos(ha.to(u.radian).value) *
+             np.sin(self['b'].to(u.radian).value))  # due N comp.
+	z =  -(np.cos(d.to(u.radian).value) *
+               np.sin(ha.to(u.radian).value))  # due east comp.
+        return np.arctan2(z, y)
+
     def za2ha(self, za, d):
         """Calculate hour angle for given elevation and declination
         (Quantities with angle units)"""
@@ -107,6 +117,8 @@ class BinaryPulsar(coord.ICRSCoordinates):
         name = kwargs.pop('name', None)
         coord.ICRSCoordinates.__init__(self, *args)
         self.name = name
+        self.tasc = Time(55000., format='mjd', scale='tdb')
+        self.porb = 200e6 * u.yr
 
     def set_ephemeris(self, tasc, porb):
         self.tasc = tasc
@@ -169,12 +181,26 @@ j1810 = BinaryPulsar('18h10m37.28s +17d44m37.38s', name='J1810')
 j1810.set_ephemeris(tasc=Time(55130.04813, format='mjd', scale='tdb'),
                     porb=3.5561 * u.hr)
 
+b1937 = BinaryPulsar('19h39m38.558720s +21d34m59.13745s', name='B1937')
+b1937.set_ephemeris(tasc=Time(55000., format='mjd', scale='tdb'),
+                    porb=200e6 * u.yr)
+
+# b1749 = BinaryPulsar('17h52m58.6896s -28d06m37.3s', name='B1749')
+
+b1946 = BinaryPulsar('19h48m25.0067s +35d40m11.057s', name='B1946')
+
+b1508 = BinaryPulsar('15h09m25.6298s +55d31m32.394s', name='B1508')
+
+b0329 = BinaryPulsar('03h32m59.368s +54d34m43.57s', name='B0329')
+
+b1919 = BinaryPulsar('19h21m44.815s +21d53m02.25s', name='B1919')
+
 if __name__ == '__main__':
     print('Source Obs.             HA  LocSidTime UnivSidTime')
-    for src in j1012, b1957, j1810:
+    for src in b1957, b1919, b0329:
         gmststart = -100.
         gmststop = +100.
-        for obs in gmrt, lofar, aro:
+        for obs in gmrt, effelsberg, aro:
             hamax = obs.za2ha(obs.zamax, src.dec.degrees * u.degree
                               ).to(u.degree).value/15.
             if hamax < 12.:
