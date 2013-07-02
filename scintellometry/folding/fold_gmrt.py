@@ -4,6 +4,21 @@ from __future__ import division, print_function
 import numpy as np
 
 
+def fromfile(fh, dtype, recsize):
+    """Read recsize byts, with type dtype which can be bits."""
+    npdtype = np.uint8 if dtype in ('i1', 'i4') else dtype
+    raw = np.fromfile(fh, dtype=npdtype, count=recsize)
+    if np.issubdtype(dtype, np.int32):
+        return raw
+    elif dtype == 'i1':
+        pass
+    elif dtype == 'i4':
+        pass
+    else:
+        return raw.astype(np.int32)
+
+
+
 def fold(file1, file2, dtype, samplerate, fbottom, fband, nblock,
          nt, ntint, nhead, ngate, ntbin, ntw, dm, phasepol,
          half_data_bug=False, paired_samples_bug=False,
@@ -114,8 +129,6 @@ def fold(file1, file2, dtype, samplerate, fbottom, fband, nblock,
                 except:
                     break
 
-                if np.issubdtype(dtype, np.int8):
-                    raw = raw.astype(np.int32)
                 # correct for fact that every second pair is the sum of
                 # itself and the previous one
                 if paired_samples_bug:
