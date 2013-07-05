@@ -88,13 +88,13 @@ class Observatory(dict):
         return (archaversin(hsth) * u.radian).to(u.degree)
 
     def ha2az(self, ha, d):
-	y = (np.sin(d.to(u.radian).value) *
+        y = (np.sin(d.to(u.radian).value) *
              np.cos(self['l'].to(u.radian).value) -
              np.cos(d.to(u.radian).value) *
              np.cos(ha.to(u.radian).value) *
              np.sin(self['b'].to(u.radian).value))  # due N comp.
-	z =  -(np.cos(d.to(u.radian).value) *
-               np.sin(ha.to(u.radian).value))  # due east comp.
+        z = -(np.cos(d.to(u.radian).value) *
+              np.sin(ha.to(u.radian).value))  # due east comp.
         return np.arctan2(z, y)
 
     def za2ha(self, za, d):
@@ -158,7 +158,8 @@ gbt = Observatory(-(79*u.deg+50*u.arcmin+23*u.arcsec),
 gbt.zamax = 80.*u.deg  # guess
 aro = Observatory(-(78*u.deg+04*u.arcmin+22.95*u.arcsec),
                   45*u.deg+57*u.arcmin+19.81*u.arcsec, 'ARO')
-aro.zamax = 80.*u.deg  # guess
+aro.zamax = 82.9*u.deg  # includes feed being offset by 1 degree and
+# being very broad at 200 cm, gaining another degree
 lofar = Observatory(6*u.deg+52*u.arcmin+8.18*u.arcsec,
                     52*u.deg+54*u.arcmin+31.55*u.arcsec, 'LOFAR')
 lofar.zamax = 60.*u.degree  # guess, gives factor 2 loss in collecting area
@@ -195,12 +196,16 @@ b0329 = BinaryPulsar('03h32m59.368s +54d34m43.57s', name='B0329')
 
 b1919 = BinaryPulsar('19h21m44.815s +21d53m02.25s', name='B1919')
 
+crab = BinaryPulsar('05h34m31.973s +22d00m52.06s', name='CRAB')
+
+b2116 = BinaryPulsar('21h13m24.307s +46d44m08.70s', name='B2116')
+
 if __name__ == '__main__':
     print('Source Obs.             HA  LocSidTime UnivSidTime')
-    for src in b1957, b1919, b0329:
+    for src in j1810, b1919, b1957, b2116:
         gmststart = -100.
         gmststop = +100.
-        for obs in gmrt, effelsberg, aro:
+        for obs in gmrt, lofar, aro:
             hamax = obs.za2ha(obs.zamax, src.dec.degrees * u.degree
                               ).to(u.degree).value/15.
             if hamax < 12.:
@@ -231,10 +236,10 @@ if __name__ == '__main__':
                                      np.mod(gmststop,24.)))
 
             # get corresponding orbital phases for a range of dates
-            ist_date1 = '2013-06-16 12:00:00'
-            ist_date2 = '2013-07-03 12:00:00'
-            #ist_date1 = '2013-07-24 12:00:00'
-            #ist_date2 = '2013-08-08 12:00:00'
+            #ist_date1 = '2013-06-16 12:00:00'
+            #ist_date2 = '2013-07-03 12:00:00'
+            ist_date1 = '2013-07-24 12:00:00'
+            ist_date2 = '2013-07-29 12:00:00'
             ist_utc = 5.5/24.
             mjd1 = Time(ist_date1, scale='utc').mjd-ist_utc
             mjd2 = Time(ist_date2, scale='utc').mjd-ist_utc
