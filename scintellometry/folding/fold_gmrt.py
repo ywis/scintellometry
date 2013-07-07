@@ -3,20 +3,38 @@ from __future__ import division, print_function
 
 import numpy as np
 
+shift40 = np.array([4,0], np.int8)
+shift76543210 = np.array([7,6,5,4,3,2,1,0], np.int8)
+
 
 def fromfile(fh, dtype, recsize):
     """Read recsize byts, with type dtype which can be bits."""
-    npdtype = np.uint8 if dtype in ('i1', 'i4') else dtype
+    npdtype = np.int8 if dtype in ('i1', 'i4') else dtype
     raw = np.fromfile(fh, dtype=npdtype, count=recsize)
-    if np.issubdtype(dtype, np.int32):
-        return raw
-    elif dtype == 'i1':
-        pass
+    if dtype == 'i1':
+        # For a given int8 byte containing bits 76543210
+        # left_shift(byte[:,np.newaxis], shift76543210):
+        #    [0xxxxxxx, 10xxxxxx, 210xxxxx, 3210xxxx,
+        #     43210xxx, 543210xx, 6543210x, 76543210]
+        split = np.left_shift(raw[:,np.newaxis], shift76543210).flatten()
+        # right_shift(..., 6):
+        #    [0000000x, 11111110, 22222221, 33333332,
+        #     44444443, 55555554, 66666665, 77777776]
+        # so least significant bits go first.
+        np.right_shift(split, 6, split)  # explicitly give output for speedup
+        # | 1 -> value becomes +1 or -1
+        split |= 1
+        return split
     elif dtype == 'i4':
-        pass
+        # For a given int8 byte containing bits 76543210
+        # left_shift(byte[:,np.newaxis], shift40):  [3210xxxx, 76543210]
+        split = np.left_shift(raw[:,np.newaxis], shift40).flatten()
+        # right_shift(..., 4):                      [33333210, 77777654]
+        # so least significant bits go first.
+        np.right_shift(split, 4, split)  # explicitly give output for speedup
+        return split
     else:
-        return raw.astype(np.int32)
-
+        return raw
 
 
 def fold(file1, file2, dtype, samplerate, fbottom, fband, nblock,
@@ -72,7 +90,7 @@ def fold(file1, file2, dtype, samplerate, fbottom, fband, nblock,
         file2 = '/dev/null'  # this will be opened but not used below
 
     # initialize folded spectrum and waterfall
-    foldspec2 = np.zeros((nblock, ngate,ntbin))
+    foldspec2 = np.zeros((nblock, ngate, ntbin))
     nwsize = nt*ntint//ntw
     waterfall = np.zeros((nblock, nwsize))
 
@@ -129,6 +147,9 @@ def fold(file1, file2, dtype, samplerate, fbottom, fband, nblock,
                 except:
                     break
 
+                # cast up to higher # of bits to ensure we do not overflow
+                if raw.dtype.itemsize <= 2:
+                    raw = raw.astype(np.int32)
                 # correct for fact that every second pair is the sum of
                 # itself and the previous one
                 if paired_samples_bug:
