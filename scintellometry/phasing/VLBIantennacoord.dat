@@ -1,0 +1,17 @@
+Cartesian coordinates in metres
+X		Y		Z
+1656318.94 	5797865.99  	2073213.72	GMRT
+918013.75	-4346166.16	4561993.93	ARO
+4033949.50  	486989.40   	4900430.8  	EFF
+
+lat, long in radians, elevation in metres
+LAT	    LONG	ELEVATION
+0.802074    4.920553	260.4		ARO
+0.333297    1.292411	407.0		GMRT
+0.881823    0.120127	417.9		EFF	
+
+lat, long in degrees
+LAT	    LONG
+19.09652    74.049742			GMRT
+45.9555	    281.92694			ARO
+50.52472    6.8827778			EFF
