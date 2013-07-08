@@ -7,8 +7,8 @@ X		Y		Z
 lat, long in radians, elevation in metres
 LAT	    LONG	ELEVATION
 0.802074    4.920553	260.4		ARO
-0.333297    1.292411	660.0		GMRT * check elevation
-0.881823    0.120127	419.2		EFF	
+0.333297    1.292411	407.0		GMRT
+0.881823    0.120127	417.9		EFF	
 
 lat, long in degrees
 LAT	    LONG
