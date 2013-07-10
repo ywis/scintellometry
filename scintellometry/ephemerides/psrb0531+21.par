@@ -1,0 +1,16 @@
+# ATNF 25-JUN-2013 - likely not OK, see also crab2.txt
+PSRJ           	J0534+2200
+RAJ            	05:34:31.973             5.000e-03
+DECJ           	+22:00:52.06             6.000e-02
+DM             	56.791                   1.000e-03
+PEPOCH         	40000.00
+F0             	30.2254370               1.000e-07
+F1             	-3.86228E-10             3.000e-15
+PMRA           	-14.7                    8.000e-01
+PMDEC          	2.0                      8.000e-01
+POSEPOCH       	40675
+F2             	1.2426E-20               5.000e-24
+EPHEM          	DE405
+RM             	-42.3                    5.000e-01
+F3             	-0.64E-30                5.000e-32
+UNITS          	TDB
