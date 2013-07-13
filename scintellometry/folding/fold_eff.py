@@ -1,6 +1,8 @@
 """FFT and fold Effelsberg data"""
 from __future__ import division, print_function
 
+import gzip
+
 import numpy as np
 # use FFT from scipy, since unlike numpy it does not cast up to complex128
 from scipy.fftpack import fft, fftfreq, fftshift
@@ -64,7 +66,9 @@ def fold(file1, samplerate, fmid, nchan,
     recsize = 4*nchan*ntint
     if verbose:
         print('Reading from {}'.format(file1))
-    with open(file1, 'rb', recsize) as fh1:
+
+    myopen = gzip.open if '.gz' in file1 else gzip.open
+    with myopen(file1, 'rb', recsize) as fh1:
 
         if nhead > 0:
             if verbose:
@@ -93,8 +97,8 @@ def fold(file1, samplerate, fmid, nchan,
             try:
                 # data stored as series of two two-byte complex numbers,
                 # one for each polarization
-                raw = np.fromfile(fh1, dtype=np.int8,
-                                  count=recsize).reshape(-1,nchan,2,2)
+                raw = np.fromstring(fh1.read(recsize),
+                                    dtype=np.int8).reshape(-1,nchan,2,2)
             except:
                 break
 
