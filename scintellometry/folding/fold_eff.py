@@ -67,7 +67,7 @@ def fold(file1, samplerate, fmid, nchan,
     if verbose:
         print('Reading from {}'.format(file1))
 
-    myopen = gzip.open if '.gz' in file1 else gzip.open
+    myopen = gzip.open if '.gz' in file1 else open
     with myopen(file1, 'rb', recsize) as fh1:
 
         if nhead > 0:
