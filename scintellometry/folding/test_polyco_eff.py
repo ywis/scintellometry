@@ -11,8 +11,8 @@ from pmap import pmap
 if __name__ == '__main__':
     # pulsar parameters
     # psr = 'B1919+21'
-    psr = 'B2016+28'
-    # psr = 'B1957+20'
+    # psr = 'B2016+28'
+    psr = 'B1957+20'
 
     date_dict = {'B1919+21': '2013-07-01-23:03:20',
                  'B1957+20': '2013-07-01-23:44:40',
@@ -28,9 +28,9 @@ if __name__ == '__main__':
                                              2.0877275767457872e-16],
                                             # polyco is for 00:00 UTC midtime,
                                             # while obs starts at 23:44:40,
-                                            # or 5*60+20=320 s earlier
-                                            [-3600+320, 3600+320],
-                                            [-3600,3600]),
+                                            # or 15*60+20=920 s earlier
+                                            [-3600, 3600],
+                                            [-3600-920,3600-920]),
                      'B2016+28': Polynomial([0., 1.7922641135652])}
 
     dm = dm_dict[psr]
@@ -38,17 +38,17 @@ if __name__ == '__main__':
 
     igate = None
     size = 640000000
-    offsets = 6400000000 + np.arange(3)*size
+    offsets = 6400000000 + np.arange(63)*size
     fndir1 = '/mnt/data-pen1/mhvk/effelsberg_test/20130701_EFF_320/'
     nhead = 4096
     # frequency channels to make
-    nblock = 512
-    ntbin = 4  # number of bins the time series is split into for folding
+    nblock = 256
+    ntbin = 2  # number of bins the time series is split into for folding
     recsize = 32000000  # 32e6 2-pol real+imag samples per set
     ntint = recsize//(nblock*4)  # number of samples after FFT
     nt = size//recsize    # number of sets to fold
     ngate = 64  # number of bins over the pulsar period
-    ntw = min(1000, nt*ntint)  # number of samples to combine for waterfall
+    ntw = min(25000, nt*ntint)  # number of samples to combine for waterfall
 
     samplerate = 16 * u.MHz
 
@@ -60,22 +60,27 @@ if __name__ == '__main__':
     do_waterfall = True
     foldspecs = []
     waterfalls = []
+    window0 = phasepol.window
     for offset in offsets:
         file1 = fndir1 + date_dict[psr] + \
-            '_{:016d}'.format(offset) + '.000000.dada'
-        phasepol.window = phasepol.domain + ((offset/4) *
-                                             (1./samplerate).to(u.s).value)
+            '_{:016d}'.format(offset) + '.000000.dada.gz'
+        phasepol.window = window0 + ((offset/4) *
+                                     (1./samplerate).to(u.s).value)
 
         f2, wf = fold(file1, samplerate,
                       fmid, nblock, nt, ntint, nhead,
                       ngate, ntbin, ntw, dm, fref, phasepol,
                       do_waterfall=do_waterfall,
-                      verbose=verbose, progress_interval=1)
+                      verbose=verbose, progress_interval=10)
         foldspecs.append(f2)
         waterfalls.append(wf)
 
     foldspec2 = np.concatenate(foldspecs, axis=2)
     waterfall = np.concatenate(waterfalls, axis=1)
+
+    np.save("eff{}foldspec2.npy".format(psr), foldspec2)
+    np.save("eff{}waterfall.npy".format(psr), waterfall)
+
     f2 = foldspec2.copy()
     f2[nblock/2] = 0.
     foldspec1 = f2.sum(axis=2)
