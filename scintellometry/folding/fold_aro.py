@@ -1,17 +1,15 @@
 """FFT and fold Effelsberg data"""
 from __future__ import division, print_function
 
-import gzip
-
 import numpy as np
 # use FFT from scipy, since unlike numpy it does not cast up to complex128
-from scipy.fftpack import fft, fftfreq, fftshift
+from scipy.fftpack import rfft, rfftfreq
 import astropy.units as u
 
 dispersion_delay_constant = 4149. * u.s * u.MHz**2 * u.cm**3 / u.pc
 
 
-def fold(file1, samplerate, fmid, nchan,
+def fold(file1, samplerate, fedge, fedge_at_top, nchan,
          nt, ntint, nhead, ngate, ntbin, ntw, dm, fref, phasepol,
          do_waterfall=True, do_foldspec=True, verbose=True,
          progress_interval=100):
@@ -22,18 +20,20 @@ def fold(file1, samplerate, fmid, nchan,
     file1 : string
         name of the file holding voltage timeseries
     samplerate : float
-        rate at which samples were originally taken and thus band width
-        (frequency units))
-    fmid : float
-        mid point of the frequency band (frequency units)
+        rate at which samples were originally taken and thus double the
+        band width (frequency units)
+    fedge : float
+        edge of the frequency band (frequency units)
+    fedge_at_top: book
+        whether edge is at top (True) or bottom (False)
     nchan : int
         number of frequency channels for FFT
     nt, ntint : int
         total number nt of sets, each containing ntint samples in each file
-        hence, total # of samples is nt*(2*ntint), with each sample containing
-        real,imag for two polarisations
+        hence, total # of samples is nt*ntint, with each sample containing
+        containing a single polarisation
     nhead : int
-        number of bytes to skip before reading (usually 4096 for Effelsberg)
+        number of bytes to skip before reading (usually 0 for ARO)
     ngate, ntbin : int
         number of phase and time bins to use for folded spectrum
         ntbin should be an integer fraction of nt
@@ -61,14 +61,12 @@ def fold(file1, samplerate, fmid, nchan,
     nwsize = nt*ntint//ntw
     waterfall = np.zeros((nchan, nwsize))
 
-    # size in bytes of records read from file (each nchan contains 4 bytes:
-    # real,imag for 2 polarisations).
-    recsize = 4*nchan*ntint
+    # size in bytes of records read from file (simple for ARO: 1 byte/sample)
+    recsize = 2*nchan*ntint
     if verbose:
         print('Reading from {}'.format(file1))
 
-    myopen = gzip.open if '.gz' in file1 else open
-    with myopen(file1, 'rb', recsize) as fh1:
+    with open(file1, 'rb', recsize) as fh1:
 
         if nhead > 0:
             if verbose:
@@ -79,13 +77,17 @@ def fold(file1, samplerate, fmid, nchan,
         icount = np.zeros((nchan, ngate), dtype=np.int)
 
         # pre-calculate time delay due to dispersion
-        freq = fmid + fftfreq(nchan, (1./samplerate).to(u.s).value) * u.Hz
+        freq = fedge - rfftfreq(nchan, (1./samplerate).to(u.s).value) * u.Hz \
+            if fedge_at_top \
+            else fedge + rfftfreq(nchan, (1./samplerate).to(u.s).value) * u.Hz
+
         # gosh, fftpack has everything; used to calculate with:
         # fband / nchan * (np.mod(np.arange(nchan)+nchan/2, nchan)-nchan/2)
         dt = (dispersion_delay_constant * dm *
               (1./freq**2 - 1./fref**2)).to(u.s).value
 
-        dtsample = (nchan/samplerate).to(u.s).value
+        # need 2*nchan samples for each FFT
+        dtsample = (nchan*2/samplerate).to(u.s).value
 
         for j in xrange(nt):
             if verbose and (j+1) % progress_interval == 0:
@@ -97,17 +99,17 @@ def fold(file1, samplerate, fmid, nchan,
             try:
                 # data stored as series of two two-byte complex numbers,
                 # one for each polarization
-                raw = np.fromstring(fh1.read(recsize),
-                                    dtype=np.int8).reshape(-1,nchan,2,2)
+                raw = np.fromfile(fh1, dtype=np.int8,
+                                  count=recsize).reshape(-1,nchan*2)
             except:
                 break
 
-            # use view for fast conversion from float to complex
-            vals = raw.astype(np.float32).view(np.complex64).squeeze()
-            # vals[i_int, i_block, i_pol]
-            chan = fft(vals, axis=1, overwrite_x=True)
-            # chan[i_int, i_block, i_pol]
-            power = np.sum(chan.real**2+chan.imag**2, axis=-1)
+            vals = raw.astype(np.float32)
+            chan2 = rfft(vals, axis=-1, overwrite_x=True)**2
+            # rfft: Re[0], Re[1], Im[1], ..., Re[n/2-1], Im[n/2-1], Re[n/2]
+            # re-order to Num.Rec. format: Re[0], Re[n/2], Re[1], ....
+            power = np.hstack((chan2[:,:1]+chan2[:,-1:],
+                               chan2[:,1:-1].reshape(-1,nchan-1,2).sum(-1)))
 
             # current sample positions in stream
             isr = j*ntint + np.arange(ntint)
@@ -148,16 +150,10 @@ def fold(file1, samplerate, fmid, nchan,
     if verbose:
         print('read {0:6d} out of {1:6d}'.format(j+1, nt))
 
-    if do_foldspec:
-        # swap two halfs in frequency, so that freq increases monotonically
-        foldspec2 = fftshift(foldspec2, axes=0)
-
     if do_waterfall:
         nonzero = waterfall == 0.
         waterfall -= np.where(nonzero,
                               np.sum(waterfall, 1, keepdims=True) /
                               np.sum(nonzero, 1, keepdims=True), 0.)
-        # swap two halfs in frequency, so that freq increases monotonically
-        waterfall = fftshift(waterfall, axes=0)
 
     return foldspec2, waterfall

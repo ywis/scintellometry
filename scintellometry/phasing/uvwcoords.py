@@ -123,9 +123,9 @@ def get_uvw(ha, dec, antennas, ref_ant):
     d = dec.to(u.rad).value
     dxyz = antennas['xyz'][ref_ant] - antennas['xyz']
     #  unit vectors in the U, V, W directions
-    xyz_u = np.array([-np.sin(d)*np.cos(h), -np.sin(d)*np.sin(h), np.cos(d)])
-    xyz_v = np.array([-np.sin(h), np.cos(h), 0.])
-    xyz_w = np.array([np.cos(d)*np.cos(h), np.cos(d)*np.sin(h), np.sin(d)])
+    xyz_u = np.array([-np.sin(d)*np.cos(h), np.sin(d)*np.sin(h), np.cos(d)])
+    xyz_v = np.array([np.sin(h), np.cos(h), 0.])
+    xyz_w = np.array([np.cos(d)*np.cos(h), -np.cos(d)*np.sin(h), np.sin(d)])
     return np.vstack([(xyz_u*dxyz).sum(1),
                       (xyz_v*dxyz).sum(1),
                       (xyz_w*dxyz).sum(1)]).T
@@ -152,11 +152,12 @@ if __name__ == '__main__':
     # with Sidereal time, we can calculate the hour hangle
     # (annoyingly, which source.ra is in units of angle, cannot subtract
     #  other angles; this should get better in future versions of astropy)
-    ha = source.ra.radians * u.rad - gast - TEL_LONGITUDE
+    # Note: HA defined incorrectly before (from c code?)
+    ha = gast + TEL_LONGITUDE - source.ra.radians * u.rad
     # print(times,gast.to(u.deg).value/15.,ha.to(u.deg).value/15. % 24.)
 
     # calculate parallactic angle for possible use in polarimetry
-    chi = np.arctan2(np.cos(TEL_LATITUDE.to(u.rad).value) *
+    chi = np.arctan2(-np.cos(TEL_LATITUDE.to(u.rad).value) *
                      np.sin(ha.to(u.rad).value),
                      np.sin(TEL_LATITUDE.to(u.rad).value) *
                      np.cos(source.dec.radians) -
