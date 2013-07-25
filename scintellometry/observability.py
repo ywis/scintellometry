@@ -95,7 +95,7 @@ class Observatory(dict):
              np.sin(self['b'].to(u.radian).value))  # due N comp.
         z = -(np.cos(d.to(u.radian).value) *
               np.sin(ha.to(u.radian).value))  # due east comp.
-        return np.arctan2(z, y)
+        return np.arctan2(z, y) * u.rad
 
     def za2ha(self, za, d):
         """Calculate hour angle for given elevation and declination
@@ -147,9 +147,10 @@ def print_phases(psr, ist_date1='2013-06-16', ist_date2='2013-07-02'):
         print(time0.iso[:10], ':',
               ' '.join(['{:02d}'.format(int(round(phase*100.)) % 100)
                         for phase in phaselist]))
-
-gmrt = Observatory(74*u.deg+02*u.arcmin+59.07*u.arcsec,
-                   19*u.deg+05*u.arcmin+47.46*u.arcsec, 'GMRT')
+# from e-mail jroy@ncra.tifr.res.in 18-jul-2013
+# tempo1 coordinates 190534.8100   -740323.62; this is C02
+gmrt = Observatory(74*u.deg+03*u.arcmin+23.62*u.arcsec,
+                   19*u.deg+05*u.arcmin+34.81*u.arcsec, 'GMRT')
 # from www.ncra.tifr.res.in/ncra/gmrt/gtac/GMRT_status_doc_Dec_2012.pdf‎
 gmrt.zamax = 73.*u.deg
 
