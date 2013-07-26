@@ -5,11 +5,13 @@ import numpy as np
 
 shift40 = np.array([4,0], np.int8)
 shift76543210 = np.array([7,6,5,4,3,2,1,0], np.int8)
+msblsb_bits = np.array([-16, 15], np.int8)
+twopiby256 = 2.*np.pi / 256.
 
 
 def fromfile(fh, dtype, recsize):
     """Read recsize byts, with type dtype which can be bits."""
-    npdtype = np.int8 if dtype in ('i1', 'i4') else dtype
+    npdtype = np.int8 if dtype in ('1bit', '4bit') else dtype
     raw = np.fromfile(fh, dtype=npdtype, count=recsize)
     if dtype == 'i1':
         # For a given int8 byte containing bits 76543210
@@ -33,6 +35,24 @@ def fromfile(fh, dtype, recsize):
         # so least significant bits go first.
         np.right_shift(split, 4, split)  # explicitly give output for speedup
         return split
+    elif dtype.name == 'nibble':
+        # For a given int8 byte containing bits 76543210
+        split = np.bitwise_and(raw[:,np.newaxis], msblsb_bits)
+        # now interpretation:
+        # lsb=amplitude=0..15; msb=phase=16*(-8..7)=-128..112
+        # calculate sqrt(-2*log(1-((idf/16+0.5)/16.)); inplace for speed
+        iph = split[:,0]
+        idf = split[:,1]
+        # idf += 0.5
+        # idf /= 16.
+        # idf = np.subtract(1., idf, out=idf)
+        # idf = np.log(idf, out=idf)
+        # idf *= 2.
+        # amp = np.sqrt(idf, out=idf)
+        amp = (idf.astype(np.float32)+0.5) / 16.
+        amp = np.sqrt(-2.*np.log(1.-amp))
+        phase = (iph.astype(np.float32) + 8.) * twopiby256
+        return amp * np.exp(1.j * np.pi * phase)
     else:
         return raw
 
