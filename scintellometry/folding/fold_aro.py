@@ -1,4 +1,4 @@
-"""FFT and fold Effelsberg data"""
+"""FFT and fold ARO data"""
 from __future__ import division, print_function
 
 import numpy as np
@@ -6,19 +6,23 @@ import numpy as np
 from scipy.fftpack import rfft, rfftfreq
 import astropy.units as u
 
+from fromfile import fromfile
+
 dispersion_delay_constant = 4149. * u.s * u.MHz**2 * u.cm**3 / u.pc
 
 
-def fold(file1, samplerate, fedge, fedge_at_top, nchan,
+def fold(file1, dtype, samplerate, fedge, fedge_at_top, nchan,
          nt, ntint, nhead, ngate, ntbin, ntw, dm, fref, phasepol,
          do_waterfall=True, do_foldspec=True, verbose=True,
          progress_interval=100):
-    """FFT Effelsberg data, fold by phase/time and make a waterfall series
+    """FFT ARO data, fold by phase/time and make a waterfall series
 
     Parameters
     ----------
     file1 : string
         name of the file holding voltage timeseries
+    dtype : numpy dtype or '4bit' or '1bit'
+        way the data are stored in the file
     samplerate : float
         rate at which samples were originally taken and thus double the
         band width (frequency units)
@@ -31,7 +35,7 @@ def fold(file1, samplerate, fedge, fedge_at_top, nchan,
     nt, ntint : int
         total number nt of sets, each containing ntint samples in each file
         hence, total # of samples is nt*ntint, with each sample containing
-        containing a single polarisation
+        a single polarisation
     nhead : int
         number of bytes to skip before reading (usually 0 for ARO)
     ngate, ntbin : int
@@ -62,7 +66,7 @@ def fold(file1, samplerate, fedge, fedge_at_top, nchan,
     waterfall = np.zeros((nchan, nwsize))
 
     # size in bytes of records read from file (simple for ARO: 1 byte/sample)
-    recsize = 2*nchan*ntint
+    recsize = nchan*ntint*{np.int8: 2, '4bit': 1}[dtype]
     if verbose:
         print('Reading from {}'.format(file1))
 
@@ -99,9 +103,9 @@ def fold(file1, samplerate, fedge, fedge_at_top, nchan,
             try:
                 # data stored as series of two two-byte complex numbers,
                 # one for each polarization
-                raw = np.fromfile(fh1, dtype=np.int8,
-                                  count=recsize).reshape(-1,nchan*2)
-            except:
+                raw = fromfile(fh1, dtype, recsize).reshape(-1, nchan*2)
+            except(EOFError, IOError) as exc:
+                print("Hit {}; writing pgm's".format(exc))
                 break
 
             vals = raw.astype(np.float32)
