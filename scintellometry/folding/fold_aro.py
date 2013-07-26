@@ -13,7 +13,7 @@ dispersion_delay_constant = 4149. * u.s * u.MHz**2 * u.cm**3 / u.pc
 
 def fold(file1, dtype, samplerate, fedge, fedge_at_top, nchan,
          nt, ntint, nhead, ngate, ntbin, ntw, dm, fref, phasepol,
-         do_waterfall=True, do_foldspec=True, verbose=True,
+         coherent=False, do_waterfall=True, do_foldspec=True, verbose=True,
          progress_interval=100):
     """FFT ARO data, fold by phase/time and make a waterfall series
 
@@ -80,15 +80,31 @@ def fold(file1, dtype, samplerate, fedge, fedge_at_top, nchan,
         foldspec = np.zeros((nchan, ngate), dtype=np.int)
         icount = np.zeros((nchan, ngate), dtype=np.int)
 
-        # pre-calculate time delay due to dispersion
-        freq = fedge - rfftfreq(nchan, (1./samplerate).to(u.s).value) * u.Hz \
-            if fedge_at_top \
-            else fedge + rfftfreq(nchan, (1./samplerate).to(u.s).value) * u.Hz
+        dt1 = (1./samplerate).to(u.s)
+        if coherent:
+            # pre-calculate required turns due to dispersion
+            fcoh = (fedge - rfftfreq(nchan*ntint, dt1.value) * u.Hz
+                    if fedge_at_top
+                    else
+                    fedge + rfftfreq(nchan*ntint, dt1.value) * u.Hz)
+            # (check via eq. 5.21 and following in
+            # Lorimer & Kramer, Handbook of Pulsar Astrono
+            dang = (dispersion_delay_constant * dm * fcoh *
+                    (1./fref-1./fcoh)**2) * 360. * u.deg
+            dedisperse = np.exp(dang.to(u.rad).value * 1j
+                                ).conj().astype(np.complex64).view(np.float32)
+            # get these back into order r[0], r[1],i[1],...r[n-1],i[n-1],r[n]
+            dedisperse = np.hstack([dedisperse[:1], dedisperse[2:-1]])
+        else:
+            # pre-calculate time delay due to dispersion;
+            # [::2] sets frequency channels to numerical recipes ordering
+            freq = (fedge - rfftfreq(nchan*2, dt1.value)[::2] * u.Hz
+                    if fedge_at_top
+                    else
+                    fedge + rfftfreq(nchan*2, dt1.value)[::2] * u.Hz)
 
-        # gosh, fftpack has everything; used to calculate with:
-        # fband / nchan * (np.mod(np.arange(nchan)+nchan/2, nchan)-nchan/2)
-        dt = (dispersion_delay_constant * dm *
-              (1./freq**2 - 1./fref**2)).to(u.s).value
+            dt = (dispersion_delay_constant * dm *
+                  (1./freq**2 - 1./fref**2)).to(u.s).value
 
         # need 2*nchan samples for each FFT
         dtsample = (nchan*2/samplerate).to(u.s).value
@@ -101,15 +117,21 @@ def fold(file1, dtype, samplerate, fedge, fedge_at_top, nchan,
             # just in case numbers were set wrong -- break if file ends
             # better keep at least the work done
             try:
-                # data stored as series of two two-byte complex numbers,
-                # one for each polarization
-                raw = fromfile(fh1, dtype, recsize).reshape(-1, nchan*2)
+                # data just a series of bytes, each containing one 8 bit or
+                # two 4-bit samples (set by dtype in caller)
+                raw = fromfile(fh1, dtype, recsize)
             except(EOFError, IOError) as exc:
                 print("Hit {}; writing pgm's".format(exc))
                 break
 
             vals = raw.astype(np.float32)
-            chan2 = rfft(vals, axis=-1, overwrite_x=True)**2
+            if coherent:
+                fine = rfft(vals, axis=0, overwrite_x=True)
+                fine *= dedisperse
+                vals = irfft(fine, axis=0, overwrite_x=True)
+
+            chan2 = rfft(vals.reshape(-1, nchan*2), axis=-1,
+                         overwrite_x=True)**2
             # rfft: Re[0], Re[1], Im[1], ..., Re[n/2-1], Im[n/2-1], Re[n/2]
             # re-order to Num.Rec. format: Re[0], Re[n/2], Re[1], ....
             power = np.hstack((chan2[:,:1]+chan2[:,-1:],
@@ -129,7 +151,11 @@ def fold(file1, dtype, samplerate, fedge, fedge_at_top, nchan,
                 tsample = dtsample*isr  # times since start
 
                 for k in xrange(nchan):
-                    t = tsample - dt[k]  # dedispersed times
+                    if coherent:
+                        t = tsample  # already dedispersed
+                    else:
+                        t = tsample - dt[k]  # dedispersed times
+
                     phase = phasepol(t)  # corresponding PSR phases
                     iphase = np.remainder(phase*ngate,
                                           ngate).astype(np.int)

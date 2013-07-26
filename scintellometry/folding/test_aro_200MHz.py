@@ -14,7 +14,7 @@ if __name__ == '__main__':
     # psr = 'B2016+28'
     # psr = 'B1957+20'
     # psr = 'B0329+54'
-    psr = 'noise'
+    psr = 'B0823+26'
     dm_dict = {'B0329+54': 26.833 * u.pc / u.cm**3,
                'B0823+26': 19.454 * u.pc / u.cm**3,
                'B1919+21': 12.455 * u.pc / u.cm**3,
@@ -48,15 +48,15 @@ if __name__ == '__main__':
     file1 = fndir1 + 'stream.2013-07-24T15:06:16.0.dat'
     nhead = 0
     # had 414 * 32MB
-    size = 13891534848
+    size = 13891534848 // 2
     # frequency channels to make
-    nchan = 256
-    ntbin = 18  # number of bins the time series is split into for folding
+    nchan = 1024
+    ntbin = 18 // 3  # number of bins the time series is split into for folding
     recsize = 2**25  # 32MB sets
     ntint = recsize//nchan  # number of samples after FFT
     nt = size//recsize    # number of sets to fold
     ngate = 64  # number of bins over the pulsar period
-    ntw = min(1000, nt*ntint)  # number of samples to combine for waterfall
+    ntw = min(100000, nt*ntint)  # number of samples to combine for waterfall
 
     samplerate = 200 * u.MHz
 
@@ -67,54 +67,62 @@ if __name__ == '__main__':
 
     verbose = True
     do_waterfall = True
+    do_foldspec = True
+    coherent_dedispersion = True
 
     foldspec2, waterfall = fold(file1, '4bit', samplerate,
                                 fedge, fedge_at_top, nchan, nt, ntint, nhead,
                                 ngate, ntbin, ntw, dm, fref, phasepol,
+                                coherent=coherent_dedispersion,
                                 do_waterfall=do_waterfall,
+                                do_foldspec=do_foldspec,
                                 verbose=verbose, progress_interval=1)
 
-    np.save("aro{}foldspec2.npy".format(psr), foldspec2)
-    np.save("aro{}waterfall.npy".format(psr), waterfall)
+    if do_waterfall:
+        np.save("aro{}waterfall.npy".format(psr), waterfall)
 
-    f2 = foldspec2.copy()
-    f2[0] = 0.
-    foldspec1 = f2.sum(axis=2)
-    fluxes = foldspec1.sum(axis=0)
-    foldspec3 = f2.sum(axis=0)
-    if igate is not None:
-        dynspect = foldspec2[:,igate[0]-1:igate[1],:].sum(axis=1)
-        dynspect2 = foldspec2[:,igate[2]-1:igate[3],:].sum(axis=1)
-        f = open('dynspect'+psr+'.bin', 'wb')
-        f.write(dynspect.T.tostring())
-        f.write(dynspect2.T.tostring())
-        f.close()
-    f = open('flux.dat', 'w')
-    for i, flux in enumerate(fluxes):
-        f.write('{0:12d} {1:12.9g}\n'.format(i+1, flux))
-    f.close()
+    if do_foldspec:
+        np.save("aro{}foldspec2.npy".format(psr), foldspec2)
+
+        f2 = foldspec2.copy()
+        f2[0] = 0.
+        foldspec1 = f2.sum(axis=2)
+        fluxes = foldspec1.sum(axis=0)
+        foldspec3 = f2.sum(axis=0)
+        if igate is not None:
+            dynspect = foldspec2[:,igate[0]-1:igate[1],:].sum(axis=1)
+            dynspect2 = foldspec2[:,igate[2]-1:igate[3],:].sum(axis=1)
+            f = open('dynspect'+psr+'.bin', 'wb')
+            f.write(dynspect.T.tostring())
+            f.write(dynspect2.T.tostring())
+            f.close()
+        with open('flux.dat', 'w') as f:
+            for i, flux in enumerate(fluxes):
+                f.write('{0:12d} {1:12.9g}\n'.format(i+1, flux))
+
     plots = True
     if plots:
         if do_waterfall:
             w = waterfall.copy()
             w[0] = 0.
             pmap('waterfall.pgm', w, 1, verbose=True)
-        pmap('folded'+psr+'.pgm', foldspec1, 0, verbose)
-        pmap('foldedbin'+psr+'.pgm',
-             f2.transpose(0,2,1).reshape(nchan,-1), 1, verbose)
-        pmap('folded3'+psr+'.pgm', foldspec3, 0, verbose)
-        # open(10,file='dynspect'//psr//'.bin',form='unformatted')
-        # write(10) dynspect
-        # write(10) dynspect2
-        if igate is not None:
-            dall = dynspect+dynspect2
-            dall_sum0 = dall.sum(axis=0)
-            dall_sum0 = np.where(dall_sum0, dall_sum0, 1.)
-            dall = dall/(dall_sum0/nchan)
-            dall[0,:] = 0
-            pmap('dynspect'+psr+'.pgm', dall, 0, verbose)
-            t1 = dynspect/(dynspect.sum(axis=0)/nchan)
-            t2 = dynspect2/(dynspect2.sum(axis=0)/nchan)
-            dsub = t1-t2
-            dsub[0,:] = 0
-            pmap('dynspectdiff'+psr+'.pgm', dsub, 0, verbose)
+        if do_foldspec:
+            pmap('folded'+psr+'.pgm', foldspec1, 0, verbose)
+            pmap('foldedbin'+psr+'.pgm',
+                 f2.transpose(0,2,1).reshape(nchan,-1), 1, verbose)
+            pmap('folded3'+psr+'.pgm', foldspec3, 0, verbose)
+            # open(10,file='dynspect'//psr//'.bin',form='unformatted')
+            # write(10) dynspect
+            # write(10) dynspect2
+            if igate is not None:
+                dall = dynspect+dynspect2
+                dall_sum0 = dall.sum(axis=0)
+                dall_sum0 = np.where(dall_sum0, dall_sum0, 1.)
+                dall = dall/(dall_sum0/nchan)
+                dall[0,:] = 0
+                pmap('dynspect'+psr+'.pgm', dall, 0, verbose)
+                t1 = dynspect/(dynspect.sum(axis=0)/nchan)
+                t2 = dynspect2/(dynspect2.sum(axis=0)/nchan)
+                dsub = t1-t2
+                dsub[0,:] = 0
+                pmap('dynspectdiff'+psr+'.pgm', dsub, 0, verbose)
