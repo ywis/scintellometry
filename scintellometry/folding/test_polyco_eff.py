@@ -4,7 +4,7 @@ import numpy as np
 from numpy.polynomial import Polynomial
 import astropy.units as u
 
-from fold_eff import fold
+from fold_eff2 import fold
 from pmap import pmap
 
 # polyco using:
@@ -44,12 +44,12 @@ if __name__ == '__main__':
 
     igate = None
     offsets = offset_dict[psr]
-    fndir1 = '/mnt/data-pen1/mhvk/effelsberg_test/20130701_EFF_336/'
+    fndir1 = '/raw/mhvk/effelsberg_test/20130701_EFF_336/'
     nhead = 4096
     # frequency channels to make; for B1957, 12kHz is optimal; ~1024
     nblock = 128
     ntbin = 5  # number of bins the time series is split into for folding
-    recsize = 64000000  # 32e6 2-pol real+imag samples per set
+    recsize = 6400000  # 32e6 2-pol real+imag samples per set
     ntint = recsize//(nblock*4)  # number of samples after FFT
     nt = size//recsize    # number of sets to fold
     ngate = 128  # number of bins over the pulsar period
