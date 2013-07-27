@@ -63,7 +63,7 @@ if __name__ == '__main__':
     verbose = True
     do_waterfall = True
 
-    foldspec2, waterfall = fold(file1, samplerate,
+    foldspec2, waterfall = fold(file1, np.int8, samplerate,
                                 fedge, fedge_at_top, nblock, nt, ntint, nhead,
                                 ngate, ntbin, ntw, dm, fref, phasepol,
                                 do_waterfall=do_waterfall,
