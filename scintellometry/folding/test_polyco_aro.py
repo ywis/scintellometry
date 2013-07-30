@@ -4,9 +4,9 @@ import numpy as np
 from numpy.polynomial import Polynomial
 import astropy.units as u
 
-from fold_aro import fold
+from fold_aro2 import fold
 from pmap import pmap
-
+from multifile import multifile
 
 if __name__ == '__main__':
     # pulsar parameters
@@ -38,7 +38,7 @@ if __name__ == '__main__':
 
     igate = None
 
-    fndir1 = '/mnt/hdd2_node7/algonquin/'
+    fndir1 = '/scratch/aro/hdd2_node7/algonquin/'
     # file1 = fndir1 + 'stream0329.1.dat'
     file1 = fndir1 + 'stream.0329_VLBI_june30.1.dat'
 
@@ -63,11 +63,16 @@ if __name__ == '__main__':
     verbose = True
     do_waterfall = True
 
-    foldspec2, waterfall = fold(file1, np.int8, samplerate,
-                                fedge, fedge_at_top, nblock, nt, ntint, nhead,
-                                ngate, ntbin, ntw, dm, fref, phasepol,
-                                do_waterfall=do_waterfall,
-                                verbose=verbose, progress_interval=1)
+    with multifile('/scratch/aro/hdd2_node7/algonquin/sequence.0329_VLBI_june30.dat',
+                   ['/scratch/aro/hdd2_node7/algonquin/raw_voltage.0329_VLBI_june30.1.dat',
+                    '/scratch/aro/hdd1_node7/algonquin/raw_voltage.0329_VLBI_june30.2.dat',
+                    '/scratch/aro/hdd3_node7/algonquin/raw_voltage.0329_VLBI_june30.3.dat']) as fh1:
+        foldspec2, waterfall = fold(fh1, np.int8, samplerate,
+                                    fedge, fedge_at_top, nblock,
+                                    nt, ntint, nhead,
+                                    ngate, ntbin, ntw, dm, fref, phasepol,
+                                    do_waterfall=do_waterfall,
+                                    verbose=verbose, progress_interval=1)
 
     f2 = foldspec2.copy()
     f2[0] = 0.

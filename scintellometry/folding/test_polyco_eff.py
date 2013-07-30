@@ -3,6 +3,7 @@ from __future__ import division, print_function
 import numpy as np
 from numpy.polynomial import Polynomial
 import astropy.units as u
+from astropy.time import Time
 
 from fold_eff2 import fold
 from pmap import pmap
@@ -20,13 +21,15 @@ if __name__ == '__main__':
     # psr = 'B1919+21'
     psr = 'B2016+28'
     # psr = 'B1957+20'
-
-    date_dict = {'B1919+21': '2013-07-01-23:03:20',
-                 'B1957+20': '2013-07-01-23:44:40',
-                 'B2016+28': '2013-07-02-01:37:40'}
+    # in date_dict, T is replaced by - for filenames below
+    date_dict = {'B1919+21': '2013-07-01T23:03:20',
+                 'B1957+20': '2013-07-01T23:44:40',
+                 'B2016+28': '2013-07-02T01:37:40'}
     dm_dict = {'B1919+21': 12.455 * u.pc / u.cm**3,
                'B1957+20': 29.11680*1.001 * u.pc / u.cm**3,
                'B2016+28': 14.172 * u.pc / u.cm**3}
+    # NOTE: for serious timing, need to add known time offset!!!!
+    # see e-mail ramesh
     phasepol_dict = {'B1919+21': Polynomial([0.5, 0.7477741603725]),
                      'B1957+20': Polynomial([-1.69225873e+06,
                                              6.22154222e+02,
@@ -44,7 +47,7 @@ if __name__ == '__main__':
 
     igate = None
     offsets = offset_dict[psr]
-    fndir1 = '/raw/mhvk/effelsberg_test/20130701_EFF_336/'
+    fndir1 = '/raw/mhvk/effelsberg_test/20130701_EFF_320/'
     nhead = 4096
     # frequency channels to make; for B1957, 12kHz is optimal; ~1024
     nblock = 128
@@ -57,7 +60,7 @@ if __name__ == '__main__':
 
     samplerate = 16 * u.MHz
 
-    fmid = 320. * u.MHz
+    fmid = float(fndir1.split('_')[-1].split('/')[0]) * u.MHz
 
     fref = 325. * u.MHz  # ref. freq. for dispersion measure
 
@@ -65,9 +68,10 @@ if __name__ == '__main__':
     do_waterfall = False
     foldspecs = []
     waterfalls = []
+    time0 = Time(date_dict[psr], scale='utc')
     window0 = phasepol.window
     for offset in offsets:
-        file1 = fndir1 + date_dict[psr] + \
+        file1 = fndir1 + time0.isot.replace('T','-') + \
             '_{:016d}'.format(offset) + '.000000.dada.gz'
         phasepol.window = window0 + ((offset/4) *
                                      (1./samplerate).to(u.s).value)

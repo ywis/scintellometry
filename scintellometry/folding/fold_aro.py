@@ -3,7 +3,7 @@ from __future__ import division, print_function
 
 import numpy as np
 # use FFT from scipy, since unlike numpy it does not cast up to complex128
-from scipy.fftpack import rfft, rfftfreq
+from scipy.fftpack import rfft, irfft, rfftfreq
 import astropy.units as u
 
 from fromfile import fromfile
