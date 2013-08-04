@@ -13,7 +13,8 @@ dispersion_delay_constant = 4149. * u.s * u.MHz**2 * u.cm**3 / u.pc
 
 def fold(fh1, dtype, samplerate, fedge, fedge_at_top, nchan,
          nt, ntint, nhead, ngate, ntbin, ntw, dm, fref, phasepol,
-         coherent=False, do_waterfall=True, do_foldspec=True, verbose=True,
+         dedisperse='incoherent',
+         do_waterfall=True, do_foldspec=True, verbose=True,
          progress_interval=100):
     """FFT ARO data, fold by phase/time and make a waterfall series
 
@@ -52,6 +53,8 @@ def fold(fh1, dtype, samplerate, fedge, fedge_at_top, nchan,
     phasepol : callable
         function that returns the pulsar phase for time in seconds relative to
         start of part of the file that is read (i.e., ignoring nhead)
+    dedisperse : None or string
+        None, 'incoherent', 'coherent', 'by-channel'
     do_waterfall, do_foldspec : bool
         whether to construct waterfall, folded spectrum (default: True)
     verbose : bool
@@ -79,38 +82,43 @@ def fold(fh1, dtype, samplerate, fedge, fedge_at_top, nchan,
     icount = np.zeros((nchan, ngate), dtype=np.int)
 
     dt1 = (1./samplerate).to(u.s)
-    if coherent:
+    # need 2*nchan real-valued samples for each FFT
+    dtsample = nchan * 2 * dt1
+
+    # pre-calculate time delay due to dispersion in course channels
+    freq = (fedge - rfftfreq(nchan*2, dt1.value) * u.Hz
+            if fedge_at_top
+            else
+            fedge + rfftfreq(nchan*2, dt1.value) * u.Hz)
+    # [::2] sets frequency channels to numerical recipes ordering
+    dt = (dispersion_delay_constant * dm *
+          (1./freq[::2]**2 - 1./fref**2)).to(u.s).value
+    if dedisperse in {'coherent', 'by-channel'}:
         # pre-calculate required turns due to dispersion
-        fcoh = (fedge - rfftfreq(nchan*ntint, dt1.value) * u.Hz
+        fcoh = (fedge - rfftfreq(nchan*2*ntint, dt1.value) * u.Hz
                 if fedge_at_top
                 else
-                fedge + rfftfreq(nchan*ntint, dt1.value) * u.Hz)
+                fedge + rfftfreq(nchan*2*ntint, dt1.value) * u.Hz)
+        # set frequency relative to which dispersion is coherently corrected
+        if dedisperse == 'coherent':
+            _fref = fref
+        else:
+            # _fref = np.round((fcoh * dtsample).to(1).value) / dtsample
+            _fref = np.repeat(freq.value, ntint) * freq.unit
         # (check via eq. 5.21 and following in
         # Lorimer & Kramer, Handbook of Pulsar Astrono
         dang = (dispersion_delay_constant * dm * fcoh *
-                (1./fref-1./fcoh)**2) * 360. * u.deg
-        dedisperse = np.exp(dang.to(u.rad).value * 1j
-                            ).conj().astype(np.complex64).view(np.float32)
-        # get these back into order r[0], r[1],i[1],...r[n-1],i[n-1],r[n]
-        dedisperse = np.hstack([dedisperse[:1], dedisperse[2:-1]])
-    else:
-        # pre-calculate time delay due to dispersion;
-        # [::2] sets frequency channels to numerical recipes ordering
-        freq = (fedge - rfftfreq(nchan*2, dt1.value)[::2] * u.Hz
-                if fedge_at_top
-                else
-                fedge + rfftfreq(nchan*2, dt1.value)[::2] * u.Hz)
-
-        dt = (dispersion_delay_constant * dm *
-              (1./freq**2 - 1./fref**2)).to(u.s).value
-
-    # need 2*nchan samples for each FFT
-    dtsample = (nchan*2/samplerate).to(u.s).value
+                (1./_fref-1./fcoh)**2) * 360. * u.deg
+        # order of frequencies is r[0], r[1],i[1],...r[n-1],i[n-1],r[n]
+        # for 0 and n need only real part, but for 1...n-1 need real, imag
+        # so just get shifts for r[1], r[2], ..., r[n-1]
+        dang = dang.to(u.rad).value[1:-1:2]
+        dd_coh = np.exp(dang * 1j).conj().astype(np.complex64)
 
     for j in xrange(nt):
-        if verbose and (j+1) % progress_interval == 0:
+        if verbose and j % progress_interval == 0:
             print('Doing {:6d}/{:6d}; time={:18.12f}'.format(
-                j+1, nt, dtsample*j*ntint))   # equivalent time since start
+                j+1, nt, dtsample.value*j*ntint))   # time since start
 
         # just in case numbers were set wrong -- break if file ends
         # better keep at least the work done
@@ -121,12 +129,17 @@ def fold(fh1, dtype, samplerate, fedge, fedge_at_top, nchan,
         except(EOFError, IOError) as exc:
             print("Hit {}; writing pgm's".format(exc))
             break
+        if verbose == 'very':
+            print("Read {} items".format(raw.size), end="")
 
         vals = raw.astype(np.float32)
-        if coherent:
+        if dedisperse in {'coherent', 'by-channel'}:
             fine = rfft(vals, axis=0, overwrite_x=True)
-            fine *= dedisperse
+            fine_cmplx = fine[1:-1].view(np.complex64)
+            fine_cmplx *= dd_coh  # this overwrites parts of fine, as intended
             vals = irfft(fine, axis=0, overwrite_x=True)
+            if verbose == 'very':
+                print("... dedispersed", end="")
 
         chan2 = rfft(vals.reshape(-1, nchan*2), axis=-1,
                      overwrite_x=True)**2
@@ -134,6 +147,8 @@ def fold(fh1, dtype, samplerate, fedge, fedge_at_top, nchan,
         # re-order to Num.Rec. format: Re[0], Re[n/2], Re[1], ....
         power = np.hstack((chan2[:,:1]+chan2[:,-1:],
                            chan2[:,1:-1].reshape(-1,nchan-1,2).sum(-1)))
+        if verbose == 'very':
+            print("... power", end="")
 
         # current sample positions in stream
         isr = j*ntint + np.arange(ntint)
@@ -144,12 +159,14 @@ def fold(fh1, dtype, samplerate, fedge, fedge_at_top, nchan,
                 if iw < nwsize:  # add sum of corresponding samples
                     waterfall[:,iw] += np.sum(power[isr//ntw == iw],
                                               axis=0)
+            if verbose == 'very':
+                print("... waterfall", end="")
 
         if do_foldspec:
-            tsample = dtsample*isr  # times since start
+            tsample = dtsample.value*isr  # times since start
 
             for k in xrange(nchan):
-                if coherent:
+                if dedisperse == 'coherent':
                     t = tsample  # already dedispersed
                 else:
                     t = tsample - dt[k]  # dedispersed times
@@ -160,6 +177,9 @@ def fold(fh1, dtype, samplerate, fedge, fedge_at_top, nchan,
                 # sum and count samples by phase bin
                 foldspec[k] += np.bincount(iphase, power[:,k], ngate)
                 icount[k] += np.bincount(iphase, None, ngate)
+
+            if verbose == 'very':
+                print("... folded", end="")
 
             ibin = j*ntbin//nt  # bin in the time series: 0..ntbin-1
             if (j+1)*ntbin//nt > ibin:  # last addition to bin?
@@ -174,6 +194,10 @@ def fold(fh1, dtype, samplerate, fedge, fedge_at_top, nchan,
                 # reset for next iteration
                 foldspec *= 0
                 icount *= 0
+                if verbose == 'very':
+                    print("... added", end="")
+        if verbose == 'very':
+            print("... done")
 
     if verbose:
         print('read {0:6d} out of {1:6d}'.format(j+1, nt))
