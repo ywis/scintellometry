@@ -3,7 +3,7 @@ from __future__ import division, print_function
 
 import numpy as np
 import astropy.units as u
-import astropy.coordinates as coord
+from astropy.coordinates import ICRSCoordinates, Angle, Longitude, Latitude
 from astropy.time import Time, TimeDelta
 
 
@@ -40,7 +40,7 @@ def time2gmst(time):
         T0 = 6.697374558 + (2400.051336 * T) + (0.000025862 * T**2)
         UT = (time.mjd-mjd_int)*24.
         T0 += UT*1.002737909
-        return T0 % 24
+        return Longitude(T0, u.hourangle)
 
 
 def gmst2time(gmst, time):
@@ -59,18 +59,17 @@ def gmst2time(gmst, time):
         astropy.time.Time object with closest UT day+time at which
             siderial time is correct.
         """
-        dgmst = gmst - time2gmst(time)
-        dgmst = dgmst-24.*round(dgmst/24.)
-        return time+TimeDelta(dgmst*0.9972695663/24., format='jd',
-                              scale='utc')
+        dgmst = Longitude(gmst - time2gmst(time))
+        return time+TimeDelta(dgmst.to(u.hourangle).value*0.9972695663/24.,
+                              format='jd', scale='utc')
 
 
 class Observatory(dict):
     """Observatory: initialize with East longitude, latitude, name
     (long,lat Quantities with angle units)"""
     def __init__(self, l, b, name=None):
-        self['l'] = l
-        self['b'] = b
+        self['l'] = Longitude(l, wrap_angle=180.*u.degree)
+        self['b'] = Latitude(b)
         self['name'] = name
 
     def ha2za(self, ha, d):
@@ -81,41 +80,32 @@ class Observatory(dict):
         haversin(theta) = haversin(dec2-dec1)
                         + cos(dec2)*cos(dec1)*haversin(ra2-ra1)
         with haversin(theta) = sin**2(theta/2.)"""
-        hsth = (haversin((d-self['b']).to(u.radian).value) +
-                np.cos(d.to(u.radian).value) *
-                np.cos(self['b'].to(u.radian).value) *
-                haversin(ha.to(u.radian).value))
-        return (archaversin(hsth) * u.radian).to(u.degree)
+        hsth = (haversin(d-self['b']) +
+                np.cos(d) * np.cos(self['b']) * haversin(ha))
+        return archaversin(hsth).to(u.degree)
 
     def ha2az(self, ha, d):
-        y = (np.sin(d.to(u.radian).value) *
-             np.cos(self['l'].to(u.radian).value) -
-             np.cos(d.to(u.radian).value) *
-             np.cos(ha.to(u.radian).value) *
-             np.sin(self['b'].to(u.radian).value))  # due N comp.
-        z = -(np.cos(d.to(u.radian).value) *
-              np.sin(ha.to(u.radian).value))  # due east comp.
-        return np.arctan2(z, y) * u.rad
+        y = (np.sin(d) * np.cos(self['l']) -
+             np.cos(d) * np.cos(ha) * np.sin(self['b']))  # due N comp.
+        z = -(np.cos(d) * np.sin(ha))  # due east comp.
+        return np.arctan2(z, y).to(u.degree)
 
     def za2ha(self, za, d):
         """Calculate hour angle for given elevation and declination
         (Quantities with angle units)"""
-        if abs(((d-self['b'])/self.zamax).to(1).value) > 1.:
-            return 0. * u.degree
-        if abs(((180.*u.degree-d-self['b'])/self.zamax).to(1).value) < 1.:
-            return 180 * u.degree
-        hsha = ((haversin(za.to(u.radian).value) -
-                haversin((d-self['b']).to(u.radian).value)) /
-                (np.cos(d.to(u.radian).value) *
-                 np.cos(self['b'].to(u.radian).value)))
-        ha = archaversin(hsha) * u.radian
-        return ha.to(u.degree)
+        if abs(d-self['b']) > self.zamax:
+            return Angle(0., u.degree)
+        if abs(180.*u.degree-d-self['b']) < self.zamax:
+            return Angle(180., u.degree)
+        hsha = ((haversin(za) - haversin(d-self['b'])) /
+                (np.cos(d) * np.cos(self['b'])))
+        return archaversin(hsha).to(u.degree)
 
 
-class BinaryPulsar(coord.ICRSCoordinates):
+class BinaryPulsar(ICRSCoordinates):
     def __init__(self, *args, **kwargs):
         name = kwargs.pop('name', None)
-        coord.ICRSCoordinates.__init__(self, *args)
+        super(BinaryPulsar, self).__init__(*args)
         self.name = name
         self.tasc = Time(55000., format='mjd', scale='tdb')
         self.porb = 200e6 * u.yr
@@ -147,28 +137,23 @@ def print_phases(psr, ist_date1='2013-06-16', ist_date2='2013-07-02'):
         print(time0.iso[:10], ':',
               ' '.join(['{:02d}'.format(int(round(phase*100.)) % 100)
                         for phase in phaselist]))
+
 # from e-mail jroy@ncra.tifr.res.in 18-jul-2013
 # tempo1 coordinates 190534.8100   -740323.62; this is C02
-gmrt = Observatory(74*u.deg+03*u.arcmin+23.62*u.arcsec,
-                   19*u.deg+05*u.arcmin+34.81*u.arcsec, 'GMRT')
+gmrt = Observatory('74d03m23.62s', '19d05m34.81s', 'GMRT')
 # from www.ncra.tifr.res.in/ncra/gmrt/gtac/GMRT_status_doc_Dec_2012.pdf‎
 gmrt.zamax = 73.*u.deg
 
-gbt = Observatory(-(79*u.deg+50*u.arcmin+23*u.arcsec),
-                  38*u.deg+25*u.arcmin+59*u.arcsec, 'GBT')
+gbt = Observatory('-79d50m23s', '38d25m59s', 'GBT')
 gbt.zamax = 80.*u.deg  # guess
-aro = Observatory(-(78*u.deg+04*u.arcmin+22.95*u.arcsec),
-                  45*u.deg+57*u.arcmin+19.81*u.arcsec, 'ARO')
+aro = Observatory('-78d04m22.95s', '45d57m19.81s', 'ARO')
 aro.zamax = 82.9*u.deg  # includes feed being offset by 1 degree and
 # being very broad at 200 cm, gaining another degree
-lofar = Observatory(6*u.deg+52*u.arcmin+8.18*u.arcsec,
-                    52*u.deg+54*u.arcmin+31.55*u.arcsec, 'LOFAR')
+lofar = Observatory('06d52m08.18s', '52d54m31.55s', 'LOFAR')
 lofar.zamax = 60.*u.degree  # guess, gives factor 2 loss in collecting area
-effelsberg = Observatory(6*u.deg+52*u.arcmin+58*u.arcsec,
-                         50*u.deg+31*u.arcmin+29*u.arcsec, 'EB')
+effelsberg = Observatory('06d52m58s', '50d31m29s', 'EB')
 effelsberg.zamax = 85.*u.deg  # guess
-jodrell = Observatory(-(2*u.deg+18*u.arcmin+25.74*u.arcsec),
-                      53*u.deg+14*u.arcmin+13.2*u.arcsec, 'JB')
+jodrell = Observatory('-02d18m25.74s', '53d14m13.2s', 'JB')
 jodrell.zamax = 80.*u.deg  # guess
 
 j1012 = BinaryPulsar('10h12m33.43s +53d07m02.6s', name='J1012')
@@ -203,25 +188,27 @@ b2116 = BinaryPulsar('21h13m24.307s +46d44m08.70s', name='B2116')
 
 if __name__ == '__main__':
     print('Source Obs.             HA  LocSidTime UnivSidTime')
-    for src in j1810, b1919, b1957, b2116:
-        gmststart = -100.
-        gmststop = +100.
+    for src in j1810, b1919, b1957, b2116, j1012:
+        gmststart = -100. * u.hourangle
+        gmststop = +100. * u.hourangle
         for obs in gmrt, lofar, aro:
-            hamax = obs.za2ha(obs.zamax, src.dec.degrees * u.degree
-                              ).to(u.degree).value/15.
-            if hamax < 12.:
-                lstmin = src.ra.hours - hamax
-                gmstmin = -obs['l'].to(u.degree).value/15. + lstmin
+            hamax = obs.za2ha(obs.zamax, src.dec)
+            if hamax < 12. * u.hourangle:
+                lstmin = src.ra - hamax
+                gmstmin = -obs['l'] + lstmin
                 gmststart = max(gmststart, gmstmin)
-                lstmax = src.ra.hours + hamax
-                gmstmax = -obs['l'].to(u.degree).value/15. + lstmax
+                lstmax = src.ra + hamax
+                gmstmax = -obs['l'] + lstmax
                 gmststop = min(gmststop, gmstmax)
                 print('{:6s} {:6s}(za<{:2d}) ±{:4.1f}: '
                       '{:04.1f}-{:04.1f} = {:04.1f}-{:04.1f}'.format(
                           src.name, obs['name'],
-                          int(round(obs.zamax.to(u.deg).value)), hamax,
-                          np.mod(lstmin,24.), np.mod(lstmax,24.),
-                          np.mod(gmstmin,24.), np.mod(gmstmax,24.)))
+                          int(round(obs.zamax.to(u.deg).value)),
+                          hamax.to(u.hourangle).value,
+                          np.mod(lstmin.to(u.hourangle).value, 24.),
+                          np.mod(lstmax.to(u.hourangle).value, 24.),
+                          np.mod(gmstmin.to(u.hourangle).value, 24.),
+                          np.mod(gmstmax.to(u.hourangle).value, 24.)))
             else:
                 print('{:6s} {:6s}(za<{:2d}) ±12.0: ++++-++++ = ++++'
                       '-++++'.format(src.name, obs['name'],
@@ -229,12 +216,14 @@ if __name__ == '__main__':
 
         if gmststart >= gmststop:
             print('{:6s} all      ---:             ---- ----\n'.format(
-                src.name, np.mod(gmststart,24.), np.mod(gmststop,24.)))
+                src.name, np.mod(gmststart.to(u.hourangle).value, 24.),
+                np.mod(gmststop.to(u.hourangle).value, 24.)))
         else:
             print('{:6s} all            {:4.1f}:             {:04.1f}'
-                  '-{:04.1f}'.format(src.name, gmststop-gmststart,
-                                     np.mod(gmststart,24.),
-                                     np.mod(gmststop,24.)))
+                  '-{:04.1f}'.format(
+                      src.name, (gmststop-gmststart).to(u.hourangle).value,
+                      np.mod(gmststart.to(u.hourangle).value, 24.),
+                      np.mod(gmststop.to(u.hourangle).value, 24.)))
 
             # get corresponding orbital phases for a range of dates
             #ist_date1 = '2013-06-16 12:00:00'
