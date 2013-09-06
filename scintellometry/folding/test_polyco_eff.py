@@ -19,8 +19,8 @@ from pmap import pmap
 if __name__ == '__main__':
     # pulsar parameters
     # psr = 'B1919+21'
-    psr = 'B2016+28'
-    # psr = 'B1957+20'
+    # psr = 'B2016+28'
+    psr = 'B1957+20'
     # in date_dict, T is replaced by - for filenames below
     date_dict = {'B1919+21': '2013-07-01T23:03:20',
                  'B1957+20': '2013-07-01T23:44:40',
@@ -40,14 +40,15 @@ if __name__ == '__main__':
                      'B2016+28': Polynomial([0., 1.7922641135652])}
     size = 640000000
     offset_dict = {'B1919+21': np.arange(10, 13)*size,
-                   'B1957+20': np.arange(10, 73)*size,
+                   'B1957+20': np.arange(0, 669)*size,
                    'B2016+28': np.arange(10, 13)*size,}
     dm = dm_dict[psr]
     phasepol = phasepol_dict[psr]
 
     igate = None
     offsets = offset_dict[psr]
-    fndir1 = '/raw/mhvk/effelsberg_test/20130701_EFF_320/'
+    # fndir1 = '/raw/mhvk/effelsberg_test/20130701_EFF_320/'
+    fndir1 = '/mnt/pen_3tb1/20130701_EFF_320/'
     nhead = 4096
     # frequency channels to make; for B1957, 12kHz is optimal; ~1024
     nblock = 128
@@ -71,7 +72,7 @@ if __name__ == '__main__':
     time0 = Time(date_dict[psr], scale='utc')
     window0 = phasepol.window
     for offset in offsets:
-        file1 = fndir1 + time0.isot.replace('T','-') + \
+        file1 = fndir1 + time0.isot.replace('T','-').replace('.000','') + \
             '_{:016d}'.format(offset) + '.000000.dada.gz'
         phasepol.window = window0 + ((offset/4) *
                                      (1./samplerate).to(u.s).value)
@@ -81,6 +82,7 @@ if __name__ == '__main__':
                       ngate, ntbin, ntw, dm, fref, phasepol,
                       coherent=True, do_waterfall=do_waterfall,
                       verbose=verbose, progress_interval=10)
+        np.save("eff{}foldspec2{}.npy".format(psr, offset), f2)
         foldspecs.append(f2)
         waterfalls.append(wf)
 

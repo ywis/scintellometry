@@ -86,8 +86,7 @@ if __name__ == '__main__':
     raw_files = ['{}/hdd{}_node7/algonquin/raw_voltage.{}.{}.dat'
                  .format(fnbase, disk_no[i], dt, i) for i in range(3)]
 
-    nhead = 0
-    nchan = 1024  # frequency channels to make
+    nchan = 128  # frequency channels to make
     ngate = 64  # number of bins over the pulsar period
     recsize = 2**25  # 32MB sets
     ntint = recsize//nchan  # number of samples after FFT
@@ -95,10 +94,15 @@ if __name__ == '__main__':
     # nt = total_size // recsize
     nt = 1000  # each sample 2**25/1e8=0.3355 s
 
+    # possible offset
+    nhead = recsize * 1000
+
     ntbin = 10  # number of bins the time series is split into for folding
     ntw = min(100000, nt*ntint)  # number of samples to combine for waterfall
 
     samplerate = 200 * u.MHz
+    # account for offset, recalling there are 2 samples per byte
+    phasepol.window += (nhead * 2 / samplerate).to(u.second).value
 
     fedge = 200. * u.MHz
     fedge_at_top = True
