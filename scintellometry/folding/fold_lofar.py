@@ -3,7 +3,8 @@
 from __future__ import division, print_function
 
 import numpy as np
-from scipy.fftpack import rfftfreq  # rfft, irfft
+# use FFT from scipy, since unlike numpy it does not cast up to complex128
+from scipy.fftpack import fft, ifft, fftfreq
 import astropy.units as u
 
 from fromfile import fromfile
@@ -31,7 +32,7 @@ def fold(file1, file2, dtype, fbottom, fwidth, nchan,
         number of frequency channels
     nt, ntint : int
         number nt of sets to use, each containing ntint samples;
-        hence, total # of samples used is nt*(2*ntint).
+        hence, total # of samples used is nt*ntint for each channel.
     nskip : int
         number of bytes to skip before reading
     ngate, ntbin : int
@@ -48,6 +49,8 @@ def fold(file1, file2, dtype, fbottom, fwidth, nchan,
     phasepol : callable
         function that returns the pulsar phase for time in seconds relative to
         the start of the file that is read (i.e., including nskip)
+    coherent : bool
+        Whether to do dispersion coherently within finer channels
     do_waterfall, do_foldspec : bool
         whether to construct waterfall, folded spectrum (default: True)
     verbose : bool
@@ -57,9 +60,13 @@ def fold(file1, file2, dtype, fbottom, fwidth, nchan,
     """
 
     # initialize folded spectrum and waterfall
-    foldspec2 = np.zeros((nchan, ngate, ntbin))
-    nwsize = nt*ntint//ntw
-    waterfall = np.zeros((nchan, nwsize))
+    if do_foldspec:
+        foldspec2 = np.zeros((nchan, ngate, ntbin))
+    if do_waterfall:
+        nwsize = nt*ntint//ntw
+        waterfall = np.zeros((nchan, nwsize))
+    else:
+        waterfall = None
 
     # # of items to read from file.
     itemsize = np.dtype(dtype).itemsize
@@ -80,12 +87,24 @@ def fold(file1, file2, dtype, fbottom, fwidth, nchan,
         icount = np.zeros((nchan, ngate))
 
         dtsample = (1./fwidth).to(u.s)
-        tstart = dtsample * nskip // itemsize // nchan
+        tstart = dtsample * nskip // (nchan*itemsize)
 
         # pre-calculate time delay due to dispersion in course channels
-        freq = fbottom + fwidth * np.arange(nchan)
+        freq = fbottom + fwidth*np.arange(nchan)
         dt = (dispersion_delay_constant * dm *
               (1./freq**2 - 1./fref**2)).to(u.s).value
+
+        if coherent:
+            # pre-calculate required turns due to dispersion in fine channels
+            fcoh = (freq[np.newaxis,:] +
+                    fftfreq(ntint, dtsample.value)[:,np.newaxis] * u.Hz)
+            # fcoh[fine, channel]
+            # (check via eq. 5.21 and following in
+            # Lorimer & Kramer, Handbook of Pulsar Astrono
+            dang = (dispersion_delay_constant * dm * fcoh *
+                    (1./freq - 1./fcoh)**2) * u.cycle
+            dedisperse = np.exp(dang.to(u.rad).value * 1j
+                                ).conj().astype(np.complex64)
 
         for j in xrange(nt):
             if verbose and j % progress_interval == 0:
@@ -103,8 +122,26 @@ def fold(file1, file2, dtype, fbottom, fwidth, nchan,
             except(EOFError):
                 break
 
-            power = raw1**2+raw2**2
-            # power[#int, #block]
+            # int 8 test
+            iraw = (raw1*128.).astype(np.int8)
+            raw1 = iraw.astype(np.float32)/128.
+            iraw = (raw2*128.).astype(np.int8)
+            raw2 = iraw.astype(np.float32)/128.
+
+            if coherent:
+                chan = raw1 + 1j*raw2
+                # vals[#int, #chan]; FT channels to finely spaced grid
+                fine = fft(chan, axis=0, overwrite_x=True)
+                # fine[#fine, #chan]; correct for dispersion w/i chan
+                fine *= dedisperse
+                # fine[#fine, #chan]; FT back to channel timeseries
+                chan = ifft(fine, axis=0, overwrite_x=True)
+                # vals[#int, #chan]
+                power = chan.real**2 + chan.imag**2
+                # power[#int, #chan]; timeit -> 0.6x shorter than abs(chan)**2
+            else:
+                power = raw1**2 + raw2**2
+                # power[#int, #chan]
 
             # current sample positions in stream
             isr = j*ntint + np.arange(ntint)
@@ -117,7 +154,7 @@ def fold(file1, file2, dtype, fbottom, fwidth, nchan,
                                                   axis=0)
 
             if do_foldspec:
-                tsample = (tstart + dtsample * isr).value  # times since start
+                tsample = (tstart + isr*dtsample).value  # times since start
 
                 for k in xrange(nchan):
                     t = tsample - dt[k]  # dedispersed times

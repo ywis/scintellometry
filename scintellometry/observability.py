@@ -151,10 +151,14 @@ aro.zamax = 82.9*u.deg  # includes feed being offset by 1 degree and
 # being very broad at 200 cm, gaining another degree
 lofar = Observatory('06d52m08.18s', '52d54m31.55s', 'LOFAR')
 lofar.zamax = 60.*u.degree  # guess, gives factor 2 loss in collecting area
+wsrt = Observatory('06d36m12s', '52d54m53.s', 'WSRT')
+wsrt.hamax = 6.*u.hourangle  # from http://www.astron.nl/radio-observatory/astronomers/wsrt-guide-observations/3-telescope-parameters-and-array-configuration
 effelsberg = Observatory('06d52m58s', '50d31m29s', 'EB')
 effelsberg.zamax = 85.*u.deg  # guess
 jodrell = Observatory('-02d18m25.74s', '53d14m13.2s', 'JB')
 jodrell.zamax = 80.*u.deg  # guess
+ao = Observatory('-66d45m10s', '18d20m39s', 'AO')
+ao.zamax = 19.5*u.deg
 
 j1012 = BinaryPulsar('10h12m33.43s +53d07m02.6s', name='J1012')
 j1012.set_ephemeris(tasc=Time(50700.08162891, format='mjd', scale='tdb'),
@@ -188,11 +192,14 @@ b2116 = BinaryPulsar('21h13m24.307s +46d44m08.70s', name='B2116')
 
 if __name__ == '__main__':
     print('Source Obs.             HA  LocSidTime UnivSidTime')
-    for src in j1810, b1919, b1957, b2116, j1012:
+    for src in j1810, b1957, j1012:
         gmststart = -100. * u.hourangle
         gmststop = +100. * u.hourangle
-        for obs in gmrt, lofar, aro:
-            hamax = obs.za2ha(obs.zamax, src.dec)
+        # for obs in gmrt, lofar, aro:
+        for obs in gbt, ao, wsrt:
+            hamax = getattr(obs, 'hamax', None)
+            if hamax is None:
+                hamax = obs.za2ha(obs.zamax, src.dec)
             if hamax < 12. * u.hourangle:
                 lstmin = src.ra - hamax
                 gmstmin = -obs['l'] + lstmin
@@ -200,10 +207,13 @@ if __name__ == '__main__':
                 lstmax = src.ra + hamax
                 gmstmax = -obs['l'] + lstmax
                 gmststop = min(gmststop, gmstmax)
-                print('{:6s} {:6s}(za<{:2d}) ±{:4.1f}: '
+                print('{:6s} {:6s}({}) ±{:4.1f}: '
                       '{:04.1f}-{:04.1f} = {:04.1f}-{:04.1f}'.format(
                           src.name, obs['name'],
-                          int(round(obs.zamax.to(u.deg).value)),
+                          'ha<{:1.0f}h'.format(obs.hamax.to(u.hourangle).value)
+                          if hasattr(obs, 'hamax')
+                          else 'za<{:2d}'.format(
+                                  int(round(obs.zamax.to(u.deg).value))),
                           hamax.to(u.hourangle).value,
                           np.mod(lstmin.to(u.hourangle).value, 24.),
                           np.mod(lstmax.to(u.hourangle).value, 24.),
@@ -228,8 +238,10 @@ if __name__ == '__main__':
             # get corresponding orbital phases for a range of dates
             #ist_date1 = '2013-06-16 12:00:00'
             #ist_date2 = '2013-07-03 12:00:00'
-            ist_date1 = '2013-07-24 12:00:00'
-            ist_date2 = '2013-07-29 12:00:00'
+            #ist_date1 = '2013-07-24 12:00:00'
+            #ist_date2 = '2013-07-29 12:00:00'
+            ist_date1 = '2014-01-15 12:00:00'
+            ist_date2 = '2014-01-20 12:00:00'
             ist_utc = 5.5/24.
             mjd1 = Time(ist_date1, scale='utc').mjd-ist_utc
             mjd2 = Time(ist_date2, scale='utc').mjd-ist_utc
@@ -237,6 +249,8 @@ if __name__ == '__main__':
                 time = Time(mjd, format='mjd', scale='utc', precision=0)
                 ut_start = gmst2time(gmststart, time)
                 ut_stop = gmst2time(gmststop, time)
+                if ut_stop < ut_start:
+                    ut_stop += TimeDelta(1., format='jd')
                 ph_start, ph_stop = src.phase(ut_start), src.phase(ut_stop)
                 ist_start = ut_start + TimeDelta(ist_utc, format='jd')
                 ist_stop = ut_stop + TimeDelta(ist_utc, format='jd')

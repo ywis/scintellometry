@@ -9,16 +9,30 @@ from pmap import pmap
 
 if __name__ == '__main__':
     # pulsar parameters
-    psr = 'B1919+21'
+    # psr = 'B1919+21'
     # psr = 'B2016+28'
     # psr = 'B1957+20'
     # psr = 'B0329+54'
+    psr = 'J1810+1744'
 
     dm_dict = {'B0329+54': 26.833 * u.pc / u.cm**3,
+               'J1810+1744': 39.659298 * u.pc / u.cm**3,
                'B1919+21': 12.455 * u.pc / u.cm**3,
                'B1957+20': 29.11680*1.001 * u.pc / u.cm**3,
                'B2016+28': 14.172 * u.pc / u.cm**3}
     phasepol_dict = {'B0329+54': Polynomial([0., 1.399541538720]),
+                     'J1810+1744': Polynomial([5123935.3179235281,
+                                               601.3858344512422,
+                                               -6.8670334150772988e-06,
+                                               1.6851467436247837e-10,
+                                               1.4924190280848832e-13,
+                                               3.681791676784501e-18,
+                                               3.4408214917205562e-22,
+                                               2.3962705401172674e-25,
+                                               2.7467843239802234e-29,
+                                               1.3396130966170961e-33,
+                                               3.0840132342990634e-38,
+                                               2.7633775352567796e-43]),
                      'B1919+21': Polynomial([0.5, 0.7477741603725]),
                      'B2016+28': Polynomial([0., 1.7922641135652])}
 
@@ -27,16 +41,19 @@ if __name__ == '__main__':
 
     igate = None
 
-    file_fmt = ('/mnt/data-pen1/jhessels/B1919+21/L166109/L166109_SAP000_B000_'
-                'S{S:1d}_P{P:03d}_bf.raw')
+    file_dict = {
+        'J1810+1744': '/mnt/data-pen1/jhessels/J1810+1744/L166111/L166111',
+        'B1919+21': '/mnt/data-pen1/jhessels/B1919+21/L166109/L166109'}
+
+    file_fmt = file_dict[psr] + '_SAP000_B000_S{S:1d}_P{P:03d}_bf.raw'
     nskip = 0
     # frequency channels that file contains
     nchan = 20
-    ntint = 2**25//4//nchan  # makes 32 MB sets, roughly
+    ntint = 2**25//4//16  # 16=~nchan -> power of 2, but sets of ~32 MB
     recsize = ntint * nchan
-    nt = 8  # number of sets to fold
-    ntbin = 2  # number of bins the time series is split into for folding
-    ngate = 64  # number of bins over the pulsar period
+    nt = 110  # number of sets to fold
+    ntbin = 10  # number of bins the time series is split into for folding
+    ngate = 32  # for 1919 # number of bins over the pulsar period
     ntw = min(1000, nt*ntint)  # number of samples to combine for waterfall
 
     samplerate = 200. * u.MHz
@@ -44,8 +61,9 @@ if __name__ == '__main__':
 
     fref = 150. * u.MHz  # ref. freq. for dispersion measure
 
+    coherent = True
     verbose = True
-    do_waterfall = True
+    do_waterfall = False
 
     foldspecs = []
     waterfalls = []
@@ -60,7 +78,7 @@ if __name__ == '__main__':
                       fbottom, fwidth, nchan,
                       nt, ntint, nskip,
                       ngate, ntbin, ntw, dm, fref, phasepol,
-                      do_waterfall=do_waterfall,
+                      coherent=coherent, do_waterfall=do_waterfall,
                       verbose=verbose, progress_interval=1)
 
         np.save("lofar{}foldspec2{}.npy".format(psr, P), f2)
@@ -68,10 +86,11 @@ if __name__ == '__main__':
         waterfalls.append(wf)
 
     foldspec2 = np.concatenate(foldspecs, axis=0)
-    waterfall = np.concatenate(waterfalls, axis=0)
-
     np.save("lofar{}foldspec2.npy".format(psr), foldspec2)
-    np.save("lofar{}waterfall.npy".format(psr), waterfall)
+
+    if do_waterfall:
+        waterfall = np.concatenate(waterfalls, axis=0)
+        np.save("lofar{}waterfall.npy".format(psr), waterfall)
 
     f2 = foldspec2.copy()
     foldspec1 = f2.sum(axis=2)
