@@ -29,7 +29,7 @@ def fold(fh1, dtype, samplerate, fedge, fedge_at_top, nchan,
         band width (frequency units)
     fedge : float
         edge of the frequency band (frequency units)
-    fedge_at_top: book
+    fedge_at_top: bool
         whether edge is at top (True) or bottom (False)
     nchan : int
         number of frequency channels for FFT
@@ -69,6 +69,7 @@ def fold(fh1, dtype, samplerate, fedge, fedge_at_top, nchan,
     waterfall = np.zeros((nchan, nwsize))
 
     # size in bytes of records read from file (simple for ARO: 1 byte/sample)
+    # double since we need to get ntint samples after FFT
     recsize = nchan*ntint*{np.int8: 2, '4bit': 1}[dtype]
     if verbose:
         print('Reading from {}'.format(fh1))
@@ -85,7 +86,7 @@ def fold(fh1, dtype, samplerate, fedge, fedge_at_top, nchan,
     # need 2*nchan real-valued samples for each FFT
     dtsample = nchan * 2 * dt1
 
-    # pre-calculate time delay due to dispersion in course channels
+    # pre-calculate time delay due to dispersion in coarse channels
     freq = (fedge - rfftfreq(nchan*2, dt1.value) * u.Hz
             if fedge_at_top
             else
