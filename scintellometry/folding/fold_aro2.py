@@ -2,8 +2,19 @@
 from __future__ import division, print_function
 
 import numpy as np
-# use FFT from scipy, since unlike numpy it does not cast up to complex128
-from scipy.fftpack import rfft, rfftfreq, irfft
+try:
+    import pyfftw
+    pyfftw.interfaces.cache.enable()
+    from pyfftw.interfaces.scipy_fftpack import rfft, rfftfreq, irfft
+    import multiprocessing
+    _NTHREADS = min(4, multiprocessing.cpu_count())
+    _fftargs = {'threads': _NTHREADS,
+                'planner_effort': 'FFTW_ESTIMATE'}
+except(ImportError):
+    print("Consider installing pyfftw: https://github.com/hgomersall/pyFFTW")
+    # use FFT from scipy, since unlike numpy it does not cast up to complex128
+    from scipy.fftpack import rfft, rfftfreq, irfft
+    _fftargs = {}
 import astropy.units as u
 
 from fromfile import fromfile
@@ -135,15 +146,15 @@ def fold(fh1, dtype, samplerate, fedge, fedge_at_top, nchan,
 
         vals = raw.astype(np.float32)
         if dedisperse in {'coherent', 'by-channel'}:
-            fine = rfft(vals, axis=0, overwrite_x=True)
+            fine = rfft(vals, axis=0, overwrite_x=True, **_fftargs)
             fine_cmplx = fine[1:-1].view(np.complex64)
             fine_cmplx *= dd_coh  # this overwrites parts of fine, as intended
-            vals = irfft(fine, axis=0, overwrite_x=True)
+            vals = irfft(fine, axis=0, overwrite_x=True, **_fftargs)
             if verbose == 'very':
                 print("... dedispersed", end="")
 
         chan2 = rfft(vals.reshape(-1, nchan*2), axis=-1,
-                     overwrite_x=True)**2
+                     overwrite_x=True, **_fftargs)**2
         # rfft: Re[0], Re[1], Im[1], ..., Re[n/2-1], Im[n/2-1], Re[n/2]
         # re-order to Num.Rec. format: Re[0], Re[n/2], Re[1], ....
         power = np.hstack((chan2[:,:1]+chan2[:,-1:],

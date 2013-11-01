@@ -5,8 +5,19 @@ from __future__ import division, print_function
 import gzip
 
 import numpy as np
-# use FFT from scipy, since unlike numpy it does not cast up to complex128
-from scipy.fftpack import fft, ifft, fftfreq, fftshift
+try:
+    import pyfftw
+    pyfftw.interfaces.cache.enable()
+    from pyfftw.interfaces.scipy_fftpack import fft, ifft, fftfreq, fftshift
+    import multiprocessing
+    _NTHREADS = min(4, multiprocessing.cpu_count())
+    _fftargs = {'threads': _NTHREADS,
+                'planner_effort': 'FFTW_ESTIMATE'}
+except(ImportError):
+    print("Consider installing pyfftw: https://github.com/hgomersall/pyFFTW")
+    # use FFT from scipy, since unlike numpy it does not cast up to complex128
+    from scipy.fftpack import fft, ifft, fftfreq, fftshift
+    _fftargs = {}
 import astropy.units as u
 
 dispersion_delay_constant = 4149. * u.s * u.MHz**2 * u.cm**3 / u.pc
@@ -124,11 +135,12 @@ def fold(file1, samplerate, fmid, nchan,
             vals = raw.astype(np.float32).view(np.complex64).squeeze()
             # vals[i_int * i_block, i_pol]
             if coherent:
-                fine = fft(vals, axis=0, overwrite_x=True)
+                fine = fft(vals, axis=0, overwrite_x=True, **_fftargs)
                 fine *= dedisperse[:,np.newaxis]
-                vals = ifft(fine, axis=0, overwrite_x=True)
+                vals = ifft(fine, axis=0, overwrite_x=True, **_fftargs)
 
-            chan = fft(vals.reshape(-1, nchan, 2), axis=1, overwrite_x=True)
+            chan = fft(vals.reshape(-1, nchan, 2), axis=1, overwrite_x=True,
+                       **_fftargs)
             # chan[i_int, i_block, i_pol]
             power = np.sum(chan.real**2+chan.imag**2, axis=-1)
 
