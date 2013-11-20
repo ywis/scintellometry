@@ -7,7 +7,6 @@ import numpy as np
 import os
 import re
 import shutil
-import astropy.units as u
 
 import h5py
 
