@@ -1,5 +1,11 @@
 # -*- coding: utf-8 -*-
-""" digitiz raw LOFAR data """
+""" routines to digitize raw LOFAR data.
+
+ Main routine is convert_dtype
+ file may be run from the command line as
+ python digitize.py -h
+
+ """
 from __future__ import division, print_function
 
 import argparse
@@ -10,9 +16,9 @@ import shutil
 
 import h5py
 
-from scintellometry.folding.fromfile import fromfile
+_lofar_dtypes = {'float':'>f4', 'int8':'>i1'}
 
-def convert_dtype(files, outdir, nsig=5., drctn='f2i', check=True, verbose=None):
+def convert_dtype(files, outdir, nsig=5., direction='f2i', check=True, verbose=None):
     """
     Given a list of lofar h5 files, digitize the raw data to 'int8', 
     outputting it in outdir.
@@ -21,30 +27,38 @@ def convert_dtype(files, outdir, nsig=5., drctn='f2i', check=True, verbose=None)
     files : list of h5 files
     outdir : directory to output the digitized raw data and the h5 file
              with the processing history
-    Nsig : digitize/map raw data stream from 
-             (mean - Nsig*std(), mean + Nsig*std())
+
+    nsig : digitize/map raw data stream from 
+             (-Nsig*std(), +Nsig*std())
            to
              [-128, 128) (signed int8)
            This process clips outliers.
            (default: 5.)
-    drctn : One of 'f2i' or 'i2f'. The 'i2f' routine undoes the original
-            digitization and should reproduce the original data.
+
+    direction : One of 'f2i' or 'i2f'. The 'i2f' routine undoes the original
+                digitization and should reproduce the original data.
+            (deafult: 'f2i')
+
     check : Check the h5 structure is consistent with the filename.
             (default: True)
+
     Notes:
-    we can only process files with SUB_ARRAY_POINTING and one Beam, 
-    
+    * we can only process files with SUB_ARRAY_POINTING and one Beam, 
+    * we assume the .raw files can be found from file.replace('.h5', '.raw')
 
     """
     if not isinstance(files, list):
         files = [files]
 
-    assert drctn in ['f2i', 'i2f']
+    assert direction in ['f2i', 'i2f']
 
     for fname in files:
         fraw = fname.replace('.h5', '.raw')
         fraw_out = os.path.join(outdir, os.path.basename(fraw))
-        print("Digitizing %s to %s" % (fraw, fraw_out))
+        if direction == 'f2i':
+            print("Digitizing %s to %s" % (fraw, fraw_out))
+        elif direction == 'i2f':
+            print("unDigitizing %s to %s" % (fraw, fraw_out))
  
         if os.path.abspath(fraw) == os.path.abspath(fraw_out):
             print("Warning, this will overwrite input files")
@@ -60,77 +74,66 @@ def convert_dtype(files, outdir, nsig=5., drctn='f2i', check=True, verbose=None)
 
         recsize = ntint * nchan
         itemsize_i = np.dtype(dtype).itemsize
-        if drctn == 'f2i':
-            itemsize_o = np.dtype('i1').itemsize
-        elif drctn == 'i2f':
+        if direction == 'f2i':
+            itemsize_o = np.dtype('>i1').itemsize
+        elif direction == 'i2f':
             itemsize_o = np.dtype('>f4').itemsize
 
-        with open(fraw, 'rb', recsize*itemsize) as fh1,\
+        with open(fraw, 'rb', recsize*itemsize_i) as fh1,\
                 open(fraw_out, 'wb', recsize*itemsize_o) as fh1out,\
                 h5py.File(fnew, 'a') as h5:
-
-            # create dataset used to convert back to floats from int8's
-            if drctn == 'f2i':            
+            if verbose >= 1:
+                print("\t",fraw," has dtype", dtype)
+            # create/access dataset used to convert back to floats from int8's
+            if direction == 'f2i':            
                 h5[sap][beam][stokes].attrs['DATATYPE'] = 'int8'
                 diginfo = h5[sap][beam].create_dataset("%s_i2f" % stokes, (0, nchan), maxshape=(None, nchan), dtype='f')
                 diginfo.attrs['%s_recsize' % stokes] = recsize
                 diginfo.attrs['%s_nsig' % stokes] = nsig
-            elif drctn == 'i2f':
-                diginfo = h5[sap][beam]["%s_i2f" % stokes][...]
+            elif direction == 'i2f':
+                h5[sap][beam][stokes].attrs['DATATYPE'] = 'float'
+                diginfo = h5[sap][beam]["%s_i2f" % stokes]
 
             idx = 0
             while True:
-                try:
-                    raw1 = fromfile(fh1, dtype, recsize).reshape(-1,nchan)
-                except(EOFError, ValueError):
+                raw = fh1.read(recsize*itemsize_i)
+                if len(raw) == 0:
                     break
 
-                if drctn == 'f2i':
+                raw1 = np.fromstring(raw, dtype=dtype).reshape(-1,nchan)
+
+                if direction == 'f2i':
                     # record the stddev for possible recovery
                     std = raw1.std(axis=0)
+                    scale = nsig*std
                     digshape = diginfo.shape
                     diginfo.resize(digshape[0] + 1, axis=0)
-                    diginfo[idx] = std
 
                     # apply the digitization
-                    if True:
-                        # by variance in individual channels
-                        scale = nsig*std
-                        intmap = (128*(raw1/scale))
-                        diginfo[idx] = scale/128.
-                        # clip
-                        raw1_o = np.clip(intmap, -128, 127).astype(np.int8)
-                    else:
-                        # by linspace: SLOW, but robust, kept for posterity
-                        raw1_o = np.apply_along_axis(linspace_digitize, 0, raw1, *[nsig])
-                        # Note: if you chane linspace_digitize you'll likely need
-                        # to change diginfo as well
-                        diginfo[idx] = nsig*std/128.
-
-                elif drctn == 'i2f':
+                    # by variance in individual channels
+                    scale = nsig*std
+                    intmap = (128*(raw1/scale))
+                    diginfo[idx] = scale/128.
+                    # clip
+                    if verbose >= 2:
+                        nclip = np.sum(intmap> 127) + np.sum(intmap<-128)
+                        print("Read# {}, Clipping {}/{} samples".format(idx, nclip, intmap.size))
+                    raw1_o = np.clip(intmap, -128, 127).astype('>i1')
+                    
+                elif direction == 'i2f':
                     # convert back to float32
-                    std = diginfo[idx]
-                    raw1_o = raw1.astype('>f4') * std  
+                    scale = diginfo[idx]
+                    raw1_o = (raw1*scale).astype('>f4')
 
                 raw1_o.tofile(fh1out)
 
-                if verbose >= 1:
-                    print("rms = {}".format(std))
-                idx += 1 
+                if verbose >= 3:
+                    print("f2i rescale = {}".format(scale))
+                idx += 1
 
+            if direction == 'i2f':
+                del h5[sap][beam]["%s_i2f" % stokes]
 
-def linspace_digitize(a, Nsig=5):
-    """
-    digitize/map the 1d array from (a.mean() - Nsig*a.std(), a.mean() + Nsig*a.std())
-                      to int8 from [-2**7, 2**7)
-    This process clips large fluctuations about the mean, but is slow.
-    
-    """
-    std = a.std()
-    mu = a.mean()
-    bins = np.linspace(mu - Nsig*std, mu + Nsig*std, num=2**8).astype(a.dtype)
-    idcs = np.digitize(a, bins) - (bins.size/2 + 1)
-    return idcs.astype('i1')
 
 def lofar_h5info(fname, check=True):
     """
@@ -163,7 +166,7 @@ def lofar_h5info(fname, check=True):
     s0 = f5[h5saps[0]]
     h5beams = sorted([i for i in s0.keys() if 'BEAM' in i])
     b0 = s0[h5beams[0]]
-    h5stokes = sorted([i for i in b0.keys() if 'STOKES' in i])
+    h5stokes = sorted([i for i in b0.keys() if 'STOKES' in i and 'i2f' not in i])
     st0 = b0[h5stokes[0]]
 
     if check:
@@ -172,7 +175,7 @@ def lofar_h5info(fname, check=True):
     # future fix: currently only handle NOF_SUBBANDS
     # with 1 channel in each subband
     nchan = st0.attrs['NOF_SUBBANDS']
-    dtype = st0.dtype.str
+    dtype = _lofar_dtypes[st0.attrs['DATATYPE']]
     # process sets of ~32 MB, hence // np.log2(nchan)
     ntint = 2**25//4//int(np.log2(nchan))  # 16=~nchan -> power of 2, but sets of ~32 MB
     nsamples = b0.attrs['NOF_SAMPLES']
@@ -240,14 +243,14 @@ def CL_parser():
                         default=5.0,
                         help='Clip raw data above this many stddevs.')
 
-    parser.add_argument('--drtcn', type=str, dest='drtcn', default='f2i',
-                        help='Convert to/from int8/float32. One of f2i, i2f')
+    parser.add_argument('--refloat', action='store_true',
+                        help='Convert int8 back to float32 ("i2f").'
+                             'This only works on files having gone through the digitization process.')
 
     parser.add_argument('-nc', '--nocheck', action='store_true',
                         help='do not enforce filename consistency of *_SAP???_B???_S?_* with the actual hdf5 '
                         'structure for SUB_ARRAY_POINTING_???, BEAM_???, and STOKES_? .')
 
-#    parser.add_argument('-v', '--verbose', action='store_true')
     parser.add_argument('-v', '--verbose', action='append_const', const=1)
     return parser.parse_args()
 
@@ -255,4 +258,8 @@ if __name__ == '__main__':
     args = CL_parser()
     check = not args.nocheck
     args.verbose = 0 if args.verbose is None else sum(args.verbose)
-    convert_dtype(args.files, args.outdir, args.nsig, args.drctn, check=check, verbose=args.verbose)
+    if args.refloat:
+        direction = 'i2f'
+    else:
+        direction = 'f2i'
+    convert_dtype(args.files, args.outdir, args.nsig, direction=direction, check=check, verbose=args.verbose)
