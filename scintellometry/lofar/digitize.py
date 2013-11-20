@@ -1,10 +1,26 @@
 # -*- coding: utf-8 -*-
-""" routines to digitize raw LOFAR data.
+""" Routines to convert raw LOFAR data between 4-byte floats and 1-byte integers.
 
  Main routine is convert_dtype
- file may be run from the command line as
- python digitize.py -h
 
+ Command Line usage: digitize.py [-h] [-o OUTDIR] [-s NSIG] [--refloat] [-nc] [-v]
+                   file_SAPXXX_BEAMXXX_SX_name.h5
+                   [file_SAPXXX_BEAMXXX_SX_name.h5 ...]
+
+ Notes:
+ * we can only process files with one SUB_ARRAY_POINTING, one Beam, and one STOKES
+ * we assume the .raw files can be found from file.replace('.h5', '.raw')
+ * the float32 to int8 conversion creates a new h5 Dataset at the Beam level
+   with the name convention STOKES_X_i2f. 
+   This array provides the scaling/mapping from int8 back to float32.
+   The dataset also has attributes 'STOKES_X_nsig', preserving the NSIG argument
+                                   'STOKES_X_recsize', preserving the read buffer size
+   The dataset is deleted if direction='i2f', i..e. 'refloat'ing the byte stream
+ * digitization clips extreme fluctuations (nsig), so you may not recover the original
+   float stream. Noise will be clipped.
+ * We modify the STOKES_X 'DATATYPE' attribute, changing it from 'float' to 'int8' if direction == 'f2i'
+                                                                 'int8' to 'float' if direction == 'i2f'
+   
  """
 from __future__ import division, print_function
 
@@ -43,8 +59,18 @@ def convert_dtype(files, outdir, nsig=5., direction='f2i', check=True, verbose=N
             (default: True)
 
     Notes:
-    * we can only process files with SUB_ARRAY_POINTING and one Beam, 
-    * we assume the .raw files can be found from file.replace('.h5', '.raw')
+     * we can only process files with one SUB_ARRAY_POINTING, one Beam, and one STOKES
+     * we assume the .raw files can be found from file.replace('.h5', '.raw')
+     * the float32 to int8 conversion creates a new h5 Dataset at the Beam level
+       with the name convention STOKES_X_i2f. 
+       This array provides the scaling/mapping from int8 back to float32.
+       The dataset also has attributes 'STOKES_X_nsig', preserving the NSIG argument
+                                       'STOKES_X_recsize', preserving the read buffer size
+       The dataset is deleted if direction='i2f', i..e. 'refloat'ing the byte stream
+     * digitization clips extreme fluctuations (nsig), so you may not recover the original
+       float stream. Noise will be clipped.
+     * We modify the STOKES_X 'DATATYPE' attribute, changing it from 'float' to 'int8' if direction == 'f2i'
+                                                                     'int8' to 'float' if direction == 'i2f'
 
     """
     if not isinstance(files, list):
