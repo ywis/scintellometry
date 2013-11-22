@@ -3,11 +3,25 @@ from __future__ import division, print_function
 import numpy as np
 from numpy.polynomial import Polynomial
 import astropy.units as u
-from astropy.time import Time, TimeDelta
+from astropy.time import Time
 
 from scintellometry.folding.fold_aro2 import fold
 from scintellometry.folding.pmap import pmap
 from scintellometry.folding.multifile import multifile
+
+
+MAX_RMS = 4.2
+
+
+def rfi_filter_raw(raw):
+    rawbins = raw.reshape(-1, 1048576)  # note, this is view!
+    rawbins *= (rawbins.std(-1, keepdims=True) < MAX_RMS)
+    return raw
+
+
+def rfi_filter_power(power):
+    return np.clip(power, 0., MAX_RMS**2 * power.shape[-1])
+
 
 if __name__ == '__main__':
     # pulsar parameters
@@ -54,8 +68,9 @@ if __name__ == '__main__':
                                  -9.5396362858203809e-34,
                                  2.7444696554344206e-38,
                                  -2.9004096379523196e-43]),
-                     'B1919+21':  # B1919+21/ 2013-07-25T18:14:20
-                     Polynomial([0.5, 0.7477741603725])}
+                     # 'B1919+21':  # B1919+21/ 2013-07-25T18:14:20
+                     # Polynomial([0.5, 0.7477741603725])}
+                     'B1919+21': 'data/polycob1919+21_aro.dat'}
 
     dt = date_dict[psr]
     dm = dm_dict[psr]
@@ -71,24 +86,20 @@ if __name__ == '__main__':
                  .format(fnbase, disk_no[i], node, dt, i) for i in range(3)]
 
     #***TODO: apply LOFAR polyphase instead
-    nchan = 128  # frequency channels to make
-    ngate = 128  # number of bins over the pulsar period
+    nchan = 512  # frequency channels to make
+    ngate = 512  # number of bins over the pulsar period
     recsize = 2**25  # 32MB sets
-    ntint = recsize*2//2//nchan  # number of samples after FFT
+    ntint = recsize*2//(2 * nchan)  # number of samples after FFT
     # total_size = sum(os.path.getsize(fil) for fil in raw_files)
     # nt = total_size // recsize
-    nt = 900  # each 32MB set has 2*2**25/2e8=0.3355 s -> 5 min ~ 900
+    nt = 1800  # each 32MB set has 2*2**25/2e8=0.33554432 s, so 180 -> ~1 min
 
-    #***TODO: ensure start times match LOFAR/GMRT
-    # possible offset 240 ~ 40 seconds
-    nhead = recsize * 240
+    nskip = 0
 
     ntbin = 12  # number of bins the time series is split into for folding
-    ntw = min(100000, nt*ntint)  # number of samples to combine for waterfall
+    ntw = min(10200, nt*ntint)  # number of samples to combine for waterfall
 
     samplerate = 200 * u.MHz
-    # account for offset, recalling there are 2 samples per byte
-    phasepol.window += (nhead * 2 / samplerate).to(u.second).value
 
     fedge = 200. * u.MHz
     fedge_at_top = True
@@ -96,7 +107,7 @@ if __name__ == '__main__':
     fref = 150. * u.MHz  # ref. freq. for dispersion measure
 
     # convert time to UTC; dates given in EDT
-    time0 = Time(date_dict[psr], scale='utc') + TimeDelta(4*3600, format='sec')
+    time0 = Time(date_dict[psr], scale='utc') + 4*u.hr
 
     verbose = 'very'
     do_waterfall = True
@@ -105,21 +116,51 @@ if __name__ == '__main__':
 
     with multifile(seq_file, raw_files) as fh1:
 
-        foldspec2, waterfall = fold(fh1, '4bit', samplerate,
-                                    fedge, fedge_at_top, nchan,
-                                    nt, ntint, nhead,
-                                    ngate, ntbin, ntw, dm, fref, phasepol,
-                                    dedisperse=dedisperse,
-                                    do_waterfall=do_waterfall,
-                                    do_foldspec=do_foldspec,
-                                    verbose=verbose, progress_interval=1)
+        if not isinstance(phasepol, Polynomial):
+            from astropy.utils.data import get_pkg_data_filename
+            from pulsar.predictor import Polyco
+
+            polyco_file = get_pkg_data_filename(phasepol)
+            polyco = Polyco(polyco_file)
+            phasepol = polyco.phasepol(time0, rphase='fraction', t0=time0,
+                                       time_unit=u.second, convert=True)
+            nskip = int(round(
+                ((Time('2013-07-25T22:15:00', scale='utc') - time0) /
+                 (recsize * 2 / samplerate)).to(u.dimensionless_unscaled)))
+            if verbose:
+                print("Using start time {0} and phase polynomial {1}"
+                      .format(time0, phasepol))
+                print("Skipping {0} records and folding {1} records to cover "
+                      "time span {2} to {3}"
+                      .format(nskip, nt,
+                              time0 + nskip * recsize * 2 / samplerate,
+                              time0 + (nskip+nt) * recsize * 2 / samplerate))
+
+        foldspec, icount, waterfall = fold(
+            fh1, '4bit', samplerate, fedge, fedge_at_top, nchan,
+            nt, ntint, nskip, ngate, ntbin, ntw, dm, fref, phasepol,
+            dedisperse=dedisperse, do_waterfall=do_waterfall,
+            do_foldspec=do_foldspec, verbose=verbose, progress_interval=1,
+            rfi_filter_raw=rfi_filter_raw,
+            rfi_filter_power=None)  # rfi_filter_power)
 
     if do_waterfall:
-        np.save("aro{0}waterfall.npy".format(psr), waterfall)
+        nonzero = waterfall == 0.
+        waterfall -= np.where(nonzero,
+                              np.sum(waterfall, 1, keepdims=True) /
+                              np.sum(nonzero, 1, keepdims=True), 0.)
+        np.save("aro{0}waterfall_{1}.npy".format(psr, node), waterfall)
 
     if do_foldspec:
-        np.save("aro{0}foldspec2_{1}".format(psr, node), foldspec2)
-        f2 = foldspec2.copy()
+        np.save("aro{0}foldspec_{1}".format(psr, node), foldspec)
+        np.save("aro{0}icount_{1}".format(psr, node), icount)
+        # get normalised flux in each bin (where any were added)
+        nonzero = icount > 0
+        f2 = np.where(nonzero, foldspec/icount, 0.)
+        # subtract phase average and store
+        f2 -= np.where(nonzero,
+                       np.sum(f2, 1, keepdims=True) /
+                       np.sum(nonzero, 1, keepdims=True), 0)
         foldspec1 = f2.sum(axis=2)
         fluxes = foldspec1.sum(axis=0)
         foldspec3 = f2.sum(axis=0)

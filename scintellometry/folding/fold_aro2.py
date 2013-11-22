@@ -23,10 +23,10 @@ dispersion_delay_constant = 4149. * u.s * u.MHz**2 * u.cm**3 / u.pc
 
 
 def fold(fh1, dtype, samplerate, fedge, fedge_at_top, nchan,
-         nt, ntint, nhead, ngate, ntbin, ntw, dm, fref, phasepol,
+         nt, ntint, nskip, ngate, ntbin, ntw, dm, fref, phasepol,
          dedisperse='incoherent',
          do_waterfall=True, do_foldspec=True, verbose=True,
-         progress_interval=100):
+         progress_interval=100, rfi_filter_raw=None, rfi_filter_power=None):
     """FFT ARO data, fold by phase/time and make a waterfall series
 
     Parameters
@@ -48,8 +48,8 @@ def fold(fh1, dtype, samplerate, fedge, fedge_at_top, nchan,
         total number nt of sets, each containing ntint samples in each file
         hence, total # of samples is nt*ntint, with each sample containing
         a single polarisation
-    nhead : int
-        number of bytes to skip before reading (usually 0 for ARO)
+    nskip : int
+        number of records (ntint * nchan * 2 / 2 bytes) to skip
     ngate, ntbin : int
         number of phase and time bins to use for folded spectrum
         ntbin should be an integer fraction of nt
@@ -75,7 +75,8 @@ def fold(fh1, dtype, samplerate, fedge, fedge_at_top, nchan,
     """
 
     # initialize folded spectrum and waterfall
-    foldspec2 = np.zeros((nchan, ngate, ntbin))
+    foldspec = np.zeros((nchan, ngate, ntbin))
+    icount = np.zeros((nchan, ngate, ntbin), dtype=np.int64)
     nwsize = nt*ntint//ntw
     waterfall = np.zeros((nchan, nwsize))
 
@@ -85,17 +86,16 @@ def fold(fh1, dtype, samplerate, fedge, fedge_at_top, nchan,
     if verbose:
         print('Reading from {}'.format(fh1))
 
-    if nhead > 0:
+    if nskip > 0:
         if verbose:
-            print('Skipping {0} bytes'.format(nhead))
-        fh1.seek(nhead)
-
-    foldspec = np.zeros((nchan, ngate), dtype=np.int)
-    icount = np.zeros((nchan, ngate), dtype=np.int)
+            print('Skipping {0} records = {1} bytes'
+                  .format(nskip, nskip*recsize))
+        fh1.seek(nskip * recsize)
 
     dt1 = (1./samplerate).to(u.s)
     # need 2*nchan real-valued samples for each FFT
     dtsample = nchan * 2 * dt1
+    tstart = dtsample * ntint * nskip
 
     # pre-calculate time delay due to dispersion in coarse channels
     freq = (fedge - rfftfreq(nchan*2, dt1.value) * u.Hz
@@ -130,7 +130,7 @@ def fold(fh1, dtype, samplerate, fedge, fedge_at_top, nchan,
     for j in xrange(nt):
         if verbose and j % progress_interval == 0:
             print('Doing {:6d}/{:6d}; time={:18.12f}'.format(
-                j+1, nt, dtsample.value*j*ntint))   # time since start
+                j+1, nt, (tstart+dtsample*j*ntint).value))  # time since start
 
         # just in case numbers were set wrong -- break if file ends
         # better keep at least the work done
@@ -143,6 +143,10 @@ def fold(fh1, dtype, samplerate, fedge, fedge_at_top, nchan,
             break
         if verbose == 'very':
             print("Read {} items".format(raw.size), end="")
+
+        if rfi_filter_raw:
+            raw = rfi_filter_raw(raw)
+            print("... raw RFI", end="")
 
         vals = raw.astype(np.float32)
         if dedisperse in {'coherent', 'by-channel'}:
@@ -159,8 +163,13 @@ def fold(fh1, dtype, samplerate, fedge, fedge_at_top, nchan,
         # re-order to Num.Rec. format: Re[0], Re[n/2], Re[1], ....
         power = np.hstack((chan2[:,:1]+chan2[:,-1:],
                            chan2[:,1:-1].reshape(-1,nchan-1,2).sum(-1)))
+
         if verbose == 'very':
             print("... power", end="")
+
+        if rfi_filter_power:
+            power = rfi_filter_power(power)
+            print("... power RFI", end="")
 
         # current sample positions in stream
         isr = j*ntint + np.arange(ntint)
@@ -175,7 +184,8 @@ def fold(fh1, dtype, samplerate, fedge, fedge_at_top, nchan,
                 print("... waterfall", end="")
 
         if do_foldspec:
-            tsample = dtsample.value*isr  # times since start
+            tsample = (tstart + isr*dtsample).value  # times since start
+            ibin = j*ntbin//nt  # bin in the time series: 0..ntbin-1
 
             for k in xrange(nchan):
                 if dedisperse == 'coherent':
@@ -187,37 +197,17 @@ def fold(fh1, dtype, samplerate, fedge, fedge_at_top, nchan,
                 iphase = np.remainder(phase*ngate,
                                       ngate).astype(np.int)
                 # sum and count samples by phase bin
-                foldspec[k] += np.bincount(iphase, power[:,k], ngate)
-                icount[k] += np.bincount(iphase, None, ngate)
+                foldspec[k, :, ibin] += np.bincount(iphase, power[:, k], ngate)
+                icount[k, :, ibin] += np.bincount(iphase, power[:, k] != 0.,
+                                                  ngate)
 
             if verbose == 'very':
                 print("... folded", end="")
 
-            ibin = j*ntbin//nt  # bin in the time series: 0..ntbin-1
-            if (j+1)*ntbin//nt > ibin:  # last addition to bin?
-                # get normalised flux in each bin (where any were added)
-                nonzero = icount > 0
-                nfoldspec = np.where(nonzero, foldspec/icount, 0.)
-                # subtract phase average and store
-                nfoldspec -= np.where(nonzero,
-                                      np.sum(nfoldspec, 1, keepdims=True) /
-                                      np.sum(nonzero, 1, keepdims=True), 0)
-                foldspec2[:,:,ibin] = nfoldspec
-                # reset for next iteration
-                foldspec *= 0
-                icount *= 0
-                if verbose == 'very':
-                    print("... added", end="")
         if verbose == 'very':
             print("... done")
 
     if verbose:
         print('read {0:6d} out of {1:6d}'.format(j+1, nt))
 
-    if do_waterfall:
-        nonzero = waterfall == 0.
-        waterfall -= np.where(nonzero,
-                              np.sum(waterfall, 1, keepdims=True) /
-                              np.sum(nonzero, 1, keepdims=True), 0.)
-
-    return foldspec2, waterfall
+    return foldspec, icount, waterfall
