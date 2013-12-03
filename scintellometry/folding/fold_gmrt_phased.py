@@ -23,7 +23,7 @@ dispersion_delay_constant = 4149. * u.s * u.MHz**2 * u.cm**3 / u.pc
 
 
 def fold(fh1, dtype, samplerate, fedge, fedge_at_top, nchan,
-         nt, ntint, nhead, ngate, ntbin, ntw, dm, fref, phasepol,
+         nt, ntint, nskip, ngate, ntbin, ntw, dm, fref, phasepol,
          dedisperse='incoherent',
          do_waterfall=True, do_foldspec=True, verbose=True,
          progress_interval=100):
@@ -48,8 +48,8 @@ def fold(fh1, dtype, samplerate, fedge, fedge_at_top, nchan,
         total number nt of sets, each containing ntint samples in each file
         hence, total # of samples is nt*ntint, with each sample containing
         a single polarisation
-    nhead : int
-        number of bytes to skip before reading (usually 0 for ARO)
+    nskip : int
+        number of records (nchan*ntint*2 for phased data w/ np.int8 real,imag)
     ngate, ntbin : int
         number of phase and time bins to use for folded spectrum
         ntbin should be an integer fraction of nt
@@ -81,14 +81,16 @@ def fold(fh1, dtype, samplerate, fedge, fedge_at_top, nchan,
 
     # size in bytes of records read from file (simple for ARO: 1 byte/sample)
     # double since we need to get ntint samples after FFT
-    recsize = nchan*ntint*{np.int8: 2}[dtype]
+    itemsize = {np.int8: 2}[dtype]
+    recsize = nchan*ntint*itemsize
+
     if verbose:
         print('Reading from {}'.format(fh1))
 
-    if nhead > 0:
+    if nskip > 0:
         if verbose:
-            print('Skipping {0} bytes'.format(nhead))
-        fh1.seek(nhead)
+            print('Skipping {0} {1}-byte records'.format(nskip, recsize))
+        fh1.seek(nskip * recsize)
 
     foldspec = np.zeros((nchan, ngate), dtype=np.int)
     icount = np.zeros((nchan, ngate), dtype=np.int)
@@ -97,6 +99,7 @@ def fold(fh1, dtype, samplerate, fedge, fedge_at_top, nchan,
     # but include 2*nchan real-valued samples used for each FFT
     # (or, equivalently, real and imag for channels)
     dtsample = nchan * 2 * dt1
+    tstart = dt1 * nskip * recsize
 
     # pre-calculate time delay due to dispersion in coarse channels
     freq = fftshift(fftfreq(nchan, 2.*dt1.value)) * u.Hz
@@ -130,7 +133,7 @@ def fold(fh1, dtype, samplerate, fedge, fedge_at_top, nchan,
     for j in xrange(nt):
         if verbose and j % progress_interval == 0:
             print('Doing {:6d}/{:6d}; time={:18.12f}'.format(
-                j+1, nt, dtsample.value*j*ntint))   # time since start
+                j+1, nt, (tstart+dtsample*j*ntint).value))   # time since start
 
         # just in case numbers were set wrong -- break if file ends
         # better keep at least the work done
@@ -170,7 +173,7 @@ def fold(fh1, dtype, samplerate, fedge, fedge_at_top, nchan,
                 print("... waterfall", end="")
 
         if do_foldspec:
-            tsample = dtsample.value*isr  # times since start
+            tsample = (tstart + isr*dtsample).value  # times since start
 
             for k in xrange(nchan):
                 if dedisperse == 'coherent':

@@ -34,7 +34,7 @@ def fold(file1, file2, dtype, fbottom, fwidth, nchan,
         number nt of sets to use, each containing ntint samples;
         hence, total # of samples used is nt*ntint for each channel.
     nskip : int
-        number of bytes to skip before reading
+        number of records (nskip*ntint*4*nchan bytes) to skip before reading
     ngate, ntbin : int
         number of phase and time bins to use for folded spectrum
         ntbin should be an integer fraction of nt
@@ -62,6 +62,8 @@ def fold(file1, file2, dtype, fbottom, fwidth, nchan,
     # initialize folded spectrum and waterfall
     if do_foldspec:
         foldspec2 = np.zeros((nchan, ngate, ntbin))
+    else:
+        foldspec2 = None
     if do_waterfall:
         nwsize = nt*ntint//ntw
         waterfall = np.zeros((nchan, nwsize))
@@ -80,14 +82,14 @@ def fold(file1, file2, dtype, fbottom, fwidth, nchan,
         if nskip > 0:
             if verbose:
                 print('Skipping {0} bytes'.format(nskip))
-            fh1.seek(nskip)
-            fh2.seek(nskip)
+            fh1.seek(nskip * ntint * nchan * itemsize)
+            fh2.seek(nskip * ntint * nchan * itemsize)
 
         foldspec = np.zeros((nchan, ngate))
         icount = np.zeros((nchan, ngate))
 
         dtsample = (1./fwidth).to(u.s)
-        tstart = dtsample * nskip // (nchan*itemsize)
+        tstart = dtsample * nskip * ntint
 
         # pre-calculate time delay due to dispersion in course channels
         freq = fbottom + fwidth*np.arange(nchan)

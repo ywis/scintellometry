@@ -5,7 +5,7 @@ from __future__ import division, print_function
 import numpy as np
 from numpy.polynomial import Polynomial
 import astropy.units as u
-from astropy.time import Time, TimeDelta
+from astropy.time import Time
 
 from scintellometry.folding.twofile import twofile
 from scintellometry.folding.fold_gmrt_phased import fold
@@ -20,6 +20,7 @@ if __name__ == '__main__':
     # psr = 'B0329+54'
     # psr = 'B0823+26'
     # psr = 'J1810+1744'
+    # psr = 'B2111+46'
     psrname = ['0809+74','1508+55','1957+20','1919+21']
     dm_dict = {'B0329+54': 26.833 * u.pc / u.cm**3,
                'B0823+26': 19.454 * u.pc / u.cm**3,
@@ -27,32 +28,35 @@ if __name__ == '__main__':
                'B1919+21': 12.455 * u.pc / u.cm**3,
                'B1957+20': 29.11680*1.001 * u.pc / u.cm**3,
                'B2016+28': 14.172 * u.pc / u.cm**3,
+               'B2111+46': 141.26 * u.pc / u.cm**3,
                'noise': 0. * u.pc / u.cm**3}
     phasepol_dict = {'B0329+54': Polynomial([0., 1.399541538720]),
-                     'B1919+21': Polynomial([0.5, 0.7477741603725]),
-                     'B2016+28': Polynomial([0., 1.7922641135652])}
+                     # 'B1919+21': Polynomial([0.5, 0.7477741603725]),
+                     'B1919+21': 'data/polycob1919+21_gmrt.dat',
+                     'B2016+28': Polynomial([0., 1.7922641135652]),
+                     'B2111+46': 'data/polycob2111+46_gmrt.dat'}
 
     dm = dm_dict[psr]
     phasepol = phasepol_dict[psr]
 
-    file_dict = {
-        'B1919+21': '/mnt/data-pen1/bahmanya/tape_6/temp1/phased_array'}
-
-    file_template = (file_dict[psr] + '/node{0:2d}/' + date + '/' +
-                     psr.lower() + '.raw.Pol-{1:1s}{2:1d}.dat')
+    file_template = ('/mnt/data-pen1/bahmanya/tape_6/temp1/phased_array/'
+                     'node{0:2d}/' + date + '/' + psr.lower() + '.raw')
+    timestamp_file = file_template.format(33) + '.timestamp'
+    file_template += '.Pol-{1:1s}{2:1d}.dat'
     node = 33
     pol = 'R'
     file1 = file_template.format(node, pol, 1)
     file2 = file_template.format(node, pol, 2)
 
-    nhead = 0
     # frequency samples in a block; every sample is two bytes: real, imag
+    recsize = 2**22
     nchan = 512
-    ngate = 128  # number of bins over the pulsar period
-    ntint = 2**22 // 2 // nchan  # no. of bytes -> real,imag -> channels
-    nt = 600  # 5 min/16.667 MHz=1200*2**22
-    ntbin = 12  # number of bins the time series is split into for folding
-    ntw = min(1000, nt*ntint)  # number of samples to combine for waterfall
+    ngate = 512  # number of bins over the pulsar period
+    ntint = recsize // (2 * nchan)  # no. of bytes -> real,imag -> channels
+    nt = 500  # 5 min/16.667 MHz=2400*(recsize / 2)
+    ntbin = 5  # number of bins the time series is split into for folding
+    ntw = min(170, nt*ntint)  # number of samples to combine for waterfall
+    # 170 /(100.*u.MHz/6.) * 512 = 0.0052224 s = 256 bins/pulse
 
     samplerate = 100.*u.MHz / 3.
 
@@ -61,21 +65,45 @@ if __name__ == '__main__':
 
     fref = 150. * u.MHz  # ref. freq. for dispersion measure
 
-    time0 = (Time('2013-07-26T03:43:08', scale='utc') -
-             TimeDelta(5.5/24., format='jd'))
-
     verbose = True
     do_waterfall = True
     do_foldspec = True
     dedisperse = 'incoherent'
 
-    print(file1, file2)
+    with twofile(timestamp_file, [file1, file2]) as fh1:
+        if verbose:
+            print("Start time = {}; gsb start = {}"
+                  .format(fh1.timestamps[0], fh1.gsb_start))
 
-    with twofile([file1, file2]) as fh1:
+        if not isinstance(phasepol, Polynomial):
+            from astropy.utils.data import get_pkg_data_filename
+            from pulsar.predictor import Polyco
 
+            polyco_file = get_pkg_data_filename(phasepol)
+            polyco = Polyco(polyco_file)
+            time0 = fh1.timestamps[0]
+            # GMRT time is off by 1 second
+            time0 -= (2.**24/(100*u.MHz/6.)).to(u.s)
+            # time0 -= 1. * u.s
+            phasepol = polyco.phasepol(time0, rphase='fraction', t0=time0,
+                                       time_unit=u.second, convert=True)
+            nskip = int(round(
+                ((Time('2013-07-25T22:15:00', scale='utc') - time0) /
+                 (recsize / samplerate)).to(u.dimensionless_unscaled)))
+            if verbose:
+                print("Using start time {0} and phase polynomial {1}"
+                      .format(time0, phasepol))
+                print("Skipping {0} records and folding {1} records to cover "
+                      "time span {2} to {3}"
+                      .format(nskip, nt,
+                              time0 + nskip * recsize / samplerate,
+                              time0 + (nskip+nt) * recsize / samplerate))
+
+        else:
+            nskip = 0
         foldspec2, waterfall = fold(fh1, np.int8, samplerate,
                                     fedge, fedge_at_top, nchan,
-                                    nt, ntint, nhead,
+                                    nt, ntint, nskip,
                                     ngate, ntbin, ntw, dm, fref, phasepol,
                                     dedisperse=dedisperse,
                                     do_waterfall=do_waterfall,
@@ -83,7 +111,7 @@ if __name__ == '__main__':
                                     verbose=verbose, progress_interval=1)
 
     if do_waterfall:
-        np.save("gmrt{0}waterfall.npy".format(psr), waterfall)
+        np.save("gmrt{0}waterfall_{1}.npy".format(psr, pol), waterfall)
 
     if do_foldspec:
         np.save("gmrt{0}foldspec2_{1}".format(psr, pol), foldspec2)
