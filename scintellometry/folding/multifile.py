@@ -18,6 +18,9 @@ class multifile(object):
     def seek(self, offset):
         assert offset % self.recsize == 0
         self.index = offset // self.recsize
+        for i, fh in enumerate(self.fh_raw):
+            fh.seek(np.count_nonzero(self.sequence['raw'][:self.index] == i) *
+                    self.recsize)
 
     def close(self):
         for fh in self.fh_raw:
