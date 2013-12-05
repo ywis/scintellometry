@@ -129,6 +129,7 @@ def fold(fh, comm, dtype, samplerate, fedge, fedge_at_top, nchan,
         thisfftfreq = fftfreq
 
     # pre-calculate time delay due to dispersion in coarse channels
+    print("R", fedge, fh)
     if fedge_at_top:
         freq = fedge - thisfftfreq(nchan*2, dt1.value) * u.Hz
     else:

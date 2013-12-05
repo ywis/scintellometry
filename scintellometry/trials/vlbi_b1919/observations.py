@@ -29,7 +29,7 @@ def obsdata(conf='observations.conf'):
 
 class telescope(dict):
     def __init__(self, name):
-        assert name in ['aro', 'lofar', 'gnrt']
+        assert name in ['aro', 'lofar', 'gmrt']
         self['name'] = name
         self['observations'] = []
 
@@ -90,7 +90,6 @@ class telescope(dict):
         file_fmt = self['file_fmt']
         S = obs.get('S', self.get('S', None))
         P = obs.get('P', self.get('P', None))
-        print "FF", file_fmt
         files = []
         for p in range(P[0], P[1]):
             file1 = file_fmt.format(fnbase, floc, S=S[0], P=p)

@@ -36,9 +36,13 @@ class multifile(psrFITS):
             time0 = Time(time0, scale='utc')
         
         dt = (Time(date, scale='utc')-time0)
-        nskip = int(round(
-            (dt/(self.recsize*2 / self.samplerate))
-            .to(u.dimensionless_unscaled)))
+        # Temporary LOFAR fix: need to unify ntint, recsize, fwidth
+        if 'fwidth' in self.__dict__:
+            nskip = int(round( (dt/(self.ntint / self.fwidth)).to(u.dimensionless_unscaled)))
+        else:
+            nskip = int(round(
+                (dt/(self.recsize*2 / self.samplerate))
+                .to(u.dimensionless_unscaled)))
         return nskip
 
     def __exit__(self, exc_type, exc_value, traceback):
@@ -176,12 +180,13 @@ _ARO_defs['SUBINT']  = {'INT_TYPE': 'TIME',
 #  |_____| \___/ |__|   |__|__||__|\_|
 #                                     
 class LOFARdata(multifile):
-    def __init__(self, fname1, fname2, comm=None, recsize=2**25, samplerate=200.*u.MHz):
+    def __init__(self, fname1, fname2, comm=None, recsize=2**16, samplerate=200.*u.MHz):
         self.telescope = 'lofar'
         super(LOFARdata, self).__init__(hdus=['SUBINT'])
         self.set_hdu_defaults(_LOFAR_defs)
 
-
+        self.fname1 = fname1
+        self.fname2 = fname2
         if comm is None:
             self.comm = MPI.COMM_SELF
         else:
@@ -205,7 +210,7 @@ class LOFARdata(multifile):
         st0 = b0[stokes[0]]
         dtype = st0.attrs['DATATYPE']
  
-        self.recsize = recsize # 2**25 = 32 Mb samples
+        self.recsize = recsize 
         nchan = st0.attrs['NOF_SUBBANDS']
         self.dtype = _lofar_dtypes[dtype]
         h0.close()
@@ -214,6 +219,9 @@ class LOFARdata(multifile):
         self.time0 = time0
         self.dtype = _lofar_dtypes[dtype]
         self.samplerate = samplerate
+        self.ntint = recsize // (4 * nchan)
+        self.fwidth = samplerate / 1024.
+
         self.fedge = fbottom
         self.fedge_at_top = False
         # use fft  (not rfft)
@@ -239,8 +247,8 @@ class LOFARdata(multifile):
         self.fh2.Close()
 
     def __repr__(self):
-        return ("<open multifile lofar files {} and {}"
-                .format(self.fh1, self.fh2))
+        return ("<open multifile lofar files {} and {}>"
+                .format(self.fname1, self.fname2))
 
 _lofar_dtypes = {'float':'>f4', 'int8':'>i1'}
 

@@ -19,7 +19,7 @@ _fref = 150. * u.MHz  # ref. freq. for dispersion measure
 
 
 def rfi_filter_raw(raw):
-    rawbins = raw.reshape(-1, 1048576)  # note, this is view!
+    rawbins = raw.reshape(-1, raw.size)  # note, this is view!
     rawbins *= (rawbins.std(-1, keepdims=True) < MAX_RMS)
     return raw
 
@@ -60,11 +60,12 @@ def reduce(telescope, psr, date, nchan=None, ngate=None, nt=18, ntbin=12, fref=_
     waterfalls = []
     
     for idx, fname in enumerate(files):
-      with GenericOpen(*fname, comm=comm) as fh:
+      with GenericOpen(*fname, recsize=4 * nchan * 2**16, comm=comm) as fh:
         time0 = fh.time0
         phasepol = Obs[telescope][obskey].get_phasepol(time0)
         # Aaron: I am not sure of ntint significance
-        ntint = fh.recsize*2//(2 * nchan)    # number of samples after FFT
+        # AROntint = fh.recsize*2//(2 * nchan)    # number of samples after FFT
+        ntint = fh.recsize//(4*nchan)
         ntw = min(10200, nt*ntint)  # number of samples to combine for waterfall
 
         samplerate = fh.samplerate
@@ -156,7 +157,10 @@ def CL_parser():
     parser = argparse.ArgumentParser(prog='reduce_data.py',
                  description='dedisperse and fold data.',
                  formatter_class=argparse.ArgumentDefaultsHelpFormatter)
-
+    parser.add_argument('--reduction_defaults', type=str,
+                        help="One of ['aro', 'lofar', 'gmrt'].\n"
+                             "A convenience flag to set the default parameters as "
+                             "configured in aro.py, lofar.py, gmrt.py")
     parser.add_argument('-t','--telescope', type=str, default='aro',
                         help="The data to reduce. One of ['aro', 'lofar', 'gmrt']." ) 
     parser.add_argument('-d','--date', type=str, default='2013-07-25T18:14:20',
@@ -197,7 +201,26 @@ def CL_parser():
 if __name__ == '__main__':
     args = CL_parser()
     args.verbose = 0 if args.verbose is None else sum(args.verbose)
-     
+    if args.reduction_defaults == 'lofar':
+        args.telescope = 'lofar'
+        args.nchan = 20
+        args.ngate =  512
+        args.psr = 'B1919+21'
+        args.date = '2013-05-05' # Note, dates are made up for now
+        args.nt = 180
+        args.ntbin = 6
+        args.waterfall = False
+        args.verbose += 1
+        args.dedisperse = None
+    elif args.reduction_defaults == 'aro':
+        # do nothing, args are already set to aro.py defaults
+        pass
+
+    elif args.reduction_defaults == 'gmrt':
+        # to-do...
+        args.telescope = 'gmrt'
+        args.psr = 'B1919+21'
+        args.date = '2013-05-05' # Note, gmrt dates made up for now
     reduce(
         args.telescope, args.psr, args.date, 
         nchan=args.nchan, ngate=args.ngate, nt=args.nt, ntbin=args.ntbin,
