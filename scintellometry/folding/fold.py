@@ -315,3 +315,17 @@ class Folder(dict):
         ifold, icount, water = fold(fh, comm=comm, **self)
         return ifold, icount, water
 
+
+def normalize_counts(q, count=None):
+    """ normalize routines for waterfall and foldspec data """
+    if count is None:
+        nonzero = np.isclose(q, np.zeros_like(q)) # == 0.
+        qn = q
+    else:
+        nonzero = count > 0
+        qn = np.where(nonzero, q/count, 0.)
+    qn -= np.where(nonzero,
+                   np.sum(qn, 1, keepdims=True) /
+                   np.sum(nonzero, 1, keepdims=True), 0.)
+    return qn
+
