@@ -6,7 +6,7 @@ import numpy as np
 import astropy.units as u
 from astropy.time import Time
 
-from scintellometry.folding.fold import Folder
+from scintellometry.folding.fold import Folder, normalize_counts
 from scintellometry.folding.pmap import pmap
 from scintellometry.folding.filehandlers import AROdata, LOFARdata
 
@@ -16,6 +16,17 @@ from mpi4py import MPI
 
 MAX_RMS = 4.2
 _fref = 150. * u.MHz  # ref. freq. for dispersion measure
+
+
+def rfi_filter_raw(raw):
+    rawbins = raw.reshape(-1, 1048576)  # note, this is view!
+    rawbins *= (rawbins.std(-1, keepdims=True) < MAX_RMS)
+    return raw
+
+
+def rfi_filter_power(power):
+    return np.clip(power, 0., MAX_RMS**2 * power.shape[-1])
+
 
 def reduce(telescope, psr, date, nchan=None, ngate=None, nt=18, ntbin=12, fref=_fref,
            do_waterfall=True, do_foldspec=True, dedisperse=None,verbose=True):
@@ -97,7 +108,7 @@ def reduce(telescope, psr, date, nchan=None, ngate=None, nt=18, ntbin=12, fref=_
             if comm.rank == 0:
                 foldspecs.append(foldspec)
                 icounts.append(icount)
-                this_f = normalize(foldspec, icount)
+                this_f = normalize_counts(foldspec, icount)
                 fname = ("{0}{1}foldspec_idx{2}_node{3}.npy")
                 iname = ("{0}{1}icount_idx{2}_node{3}.npy")
                 np.save(fname.format(telescope, psr, idx, node), foldspec)
@@ -106,7 +117,7 @@ def reduce(telescope, psr, date, nchan=None, ngate=None, nt=18, ntbin=12, fref=_
 
 
     if do_waterfall and  comm.rank == 0:
-            waterfall = normalize(np.concatenate(waterfalls, axis=0))
+            waterfall = normalize_counts(np.concatenate(waterfalls, axis=0))
             np.save("{0}{1}waterfall_{2}.npy"
                     .format(telescope, psr, node), waterfall)
 
@@ -117,7 +128,7 @@ def reduce(telescope, psr, date, nchan=None, ngate=None, nt=18, ntbin=12, fref=_
         np.save("{0}{1}icount_{2}".format(telescope, psr, node), icount)
 
         # get normalized flux in each bin (where any were added)
-        f2 = normalize(foldspec, icount)
+        f2 = normalize_counts(foldspec, icount)
         foldspec1 = f2.sum(axis=2)
         fluxes = foldspec1.sum(axis=0)
         foldspec3 = f2.sum(axis=0)
@@ -139,30 +150,6 @@ def reduce(telescope, psr, date, nchan=None, ngate=None, nt=18, ntbin=12, fref=_
                  f2.transpose(0,2,1).reshape(nchan,-1), 1, verbose)
             pmap('{0}{1}folded3_{2}.pgm'.format(telescope, psr, node),
                  foldspec3, 0, verbose)
-
-
-
-def normalize(q, count=None):
-    """ normalize routines for waterfall and foldspec data """
-    if count is None:
-        nonzero = np.isclose(q, np.zeros_like(q)) # == 0.
-        qn = q
-    else:
-        nonzero = count > 0
-        qn = np.where(nonzero, q/count, 0.)
-    qn -= np.where(nonzero,
-                   np.sum(qn, 1, keepdims=True) /
-                   np.sum(nonzero, 1, keepdims=True), 0.)
-    return qn
-
-def rfi_filter_raw(raw):
-    rawbins = raw.reshape(-1, 1048576)  # note, this is view!
-    rawbins *= (rawbins.std(-1, keepdims=True) < MAX_RMS)
-    return raw
-
-
-def rfi_filter_power(power):
-    return np.clip(power, 0., MAX_RMS**2 * power.shape[-1])
 
 
 def CL_parser():
