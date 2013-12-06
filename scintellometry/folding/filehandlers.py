@@ -9,9 +9,19 @@ import re
 from astropy.table import Table
 from astropy import units as u
 from astropy.time import Time
+from fromfile import fromfile
 from h5py import File as HDF5File
 from mpi4py import MPI
 from psrfits_tools import psrFITS
+
+from fromfile import fromfile
+
+# size in bytes of records read from file (simple for ARO: 1 byte/sample)
+# double since we need to get ntint samples after FFT
+_bytes_per_sample = {np.int8: 2, '4bit': 1}
+
+# hdf5 dtype conversion
+_lofar_dtypes = {'float':'>f4', 'int8':'>i1'}
 
 class multifile(psrFITS):
 
@@ -19,31 +29,6 @@ class multifile(psrFITS):
         for hdu, defs in dictionary.iteritems():
             for card, val in defs.iteritems():
                 self[hdu].header.update(card, val)
-
-    def nskip(self, date, time0=None):
-        """
-        return the number of records needed to skip from start of
-        file to iso timestamp 'date'.
-
-        Optionally:
-        time0 : use this start time instead of self.time0
-                either a astropy.time.Time object or string in 'utc'
-
-        """
-        if time0 is None:
-            time0 = self.time0
-        elif isinstance(time0, str):
-            time0 = Time(time0, scale='utc')
-        
-        dt = (Time(date, scale='utc')-time0)
-        # Temporary LOFAR fix: need to unify ntint, recsize, fwidth
-        if 'fwidth' in self.__dict__:
-            nskip = int(round( (dt/(self.ntint / self.fwidth)).to(u.dimensionless_unscaled)))
-        else:
-            nskip = int(round(
-                (dt/(self.recsize*2 / self.samplerate))
-                .to(u.dimensionless_unscaled)))
-        return nskip
 
     def __exit__(self, exc_type, exc_value, traceback):
         self.close()
@@ -61,7 +46,7 @@ class multifile(psrFITS):
 #      
 
 class AROdata(multifile):
-    def __init__(self, sequence_file, raw_voltage_files, recsize=2**25,
+    def __init__(self, sequence_file, raw_voltage_files, setsize=2**25,
                  dtype='4bit', samplerate=200.*u.MHz, comm=None):
         self.telescope = 'aro'
         super(AROdata, self).__init__(hdus=['SUBINT'])
@@ -95,12 +80,16 @@ class AROdata(multifile):
                                              amode=MPI.MODE_RDONLY))
             if islnk:
                 self.fh_links.append(fname)
-        self.recsize = recsize
         self.index = 0
         self.seq0 = self.sequence['seq'][0]
 
         # defaults expected by fold.py 
         self.dtype = dtype
+        self.itemsize = _bytes_per_sample.get(dtype, None)
+        if self.itemsize is None:
+            self.itemsize = np.dtype(dtype).itemsize
+        self.setsize = setsize
+        self.recsize = setsize
         self.fedge = 200. * u.MHz
         self.fedge_at_top = True
         self.samplerate = samplerate
@@ -109,6 +98,34 @@ class AROdata(multifile):
         # update headers for fun
         self[0].header.update('TBIN', (1./samplerate).to('s').value),
 
+    def nskip(self, date, time0=None):
+        """
+        return the number of records needed to skip from start of
+        file to iso timestamp 'date'.
+
+        Optionally:
+        time0 : use this start time instead of self.time0
+                either a astropy.time.Time object or string in 'utc'
+
+        """
+        if time0 is None:
+            time0 = self.time0
+        elif isinstance(time0, str):
+            time0 = Time(time0, scale='utc')
+
+        dt = (Time(date, scale='utc')-time0)
+        nskip = int(round( (dt/(self.recsize*2 / self.samplerate))
+                    .to(u.dimensionless_unscaled)))
+        return nskip
+
+    def ntint(self, nchan):
+        """
+        number of samples in a frequency bin
+        this is baseband data so need to know number of channels we're making
+
+        """
+        return 2*self.recsize // (2*nchan) 
+    
     def seek(self, offset):
         assert offset % self.recsize == 0
         self.index = offset // self.recsize
@@ -122,7 +139,10 @@ class AROdata(multifile):
         for fh in self.fh_links:
             if os.path.exists(fh):
                 os.unlink(fh)
-
+ 
+    def record_read(self, count):
+        return fromfile(self, self.dtype, count*self.itemsize)
+        
     def read(self, size):
         assert size == self.recsize
         if self.index == len(self.sequence):
@@ -180,7 +200,13 @@ _ARO_defs['SUBINT']  = {'INT_TYPE': 'TIME',
 #  |_____| \___/ |__|   |__|__||__|\_|
 #                                     
 class LOFARdata(multifile):
-    def __init__(self, fname1, fname2, comm=None, recsize=2**16, samplerate=200.*u.MHz):
+    def __init__(self, fname1, fname2, comm=None, setsize=2**16):
+        """
+        Initialize a lofar observation. We track/join the two polarizations file,
+        We also parse the corresponding HDF5 files to initialize:
+        nchan, samplerate, fwidth
+          
+        """
         self.telescope = 'lofar'
         super(LOFARdata, self).__init__(hdus=['SUBINT'])
         self.set_hdu_defaults(_LOFAR_defs)
@@ -202,26 +228,38 @@ class LOFARdata(multifile):
 
         beams = sorted([i for i in s0.keys() if 'BEAM' in i])
         b0 = s0[beams[0]]
-        fbottom = (b0['COORDINATES']['COORDINATE_1']
-                       .attrs['AXIS_VALUES_WORLD'][0] * u.Hz).to(u.MHz)
+        freqs = (b0['COORDINATES']['COORDINATE_1']
+                       .attrs['AXIS_VALUES_WORLD'] * u.Hz).to(u.MHz)
+        fbottom = freqs[0]
 
         stokes = sorted([i for i in b0.keys()
                            if 'STOKES' in i and 'i2f' not in i])
         st0 = b0[stokes[0]]
         dtype = st0.attrs['DATATYPE']
  
-        self.recsize = recsize 
-        nchan = st0.attrs['NOF_SUBBANDS']
-        self.dtype = _lofar_dtypes[dtype]
+        nchan = len(freqs) # = st0.attrs['NOF_SUBBANDS']
+
+        # can also get from np.diff(freqs.diff).mean()
+        fwidth = (b0.attrs['SUBBAND_WIDTH'] * 
+                      u.__dict__[b0.attrs['CHANNEL_WIDTH_UNIT']]).to(u.MHz)
+
+        samplerate = (b0.attrs['SAMPLING_RATE'] * 
+                          u.__dict__[b0.attrs['SAMPLING_RATE_UNIT']]).to(u.MHz)
         h0.close()
 
         # defaults expected by fold.py 
         self.time0 = time0
         self.dtype = _lofar_dtypes[dtype]
-        self.samplerate = samplerate
-        self.ntint = recsize // (4 * nchan)
-        self.fwidth = samplerate / 1024.
+        self.itemsize = _bytes_per_sample.get(self.dtype, None)
+        if self.itemsize is None:
+            self.itemsize = np.dtype(self.dtype).itemsize
 
+        self.samplerate = samplerate
+        self.nchan = nchan
+        self.fwidth = fwidth # = samplerate = np.diff(freqs).mean() 
+        self.setsize = setsize
+        self.recsize = 4 * nchan * setsize
+        self.freqs = freqs
         self.fedge = fbottom
         self.fedge_at_top = False
         # use fft  (not rfft)
@@ -231,11 +269,51 @@ class LOFARdata(multifile):
         self['PRIMARY'].header['DATE-OBS'] = self.time0.iso
         self[0].header.update('TBIN', (1./samplerate).to('s').value)
 
+    def nskip(self, date, time0=None):
+        """
+        return the number of records needed to skip from start of
+        file to iso timestamp 'date'.
+
+        Optionally:
+        time0 : use this start time instead of self.time0
+                either a astropy.time.Time object or string in 'utc'
+
+        """
+        if time0 is None:
+            time0 = self.time0
+        elif isinstance(time0, str):
+            time0 = Time(time0, scale='utc')
+
+        dt = (Time(date, scale='utc')-time0)
+        nskip = int(round( (dt/(self.ntint(self.nchan) / self.fwidth)).to(u.dimensionless_unscaled)))
+        return nskip
+
+    def ntint(self, nchan):
+        """
+        number of samples in an integration
+        Lofar data is already channelized so we assert 
+        nchan is the same
+        """
+        assert(nchan == self.nchan)
+        return self.recsize // (4 * self.nchan)
+   
     def seek(self, offset):
         self.fh1.Seek(offset)
         self.fh2.Seek(offset)
- 
+
+    def record_read(self, count):
+        """
+        read 'count' records of data,
+        returned as a complex number
+        """ 
+        raw = [np.fromstring(r, dtype=self.dtype, count=count).reshape(-1, self.nchan)
+                          for r in self.read(count * self.itemsize)]
+        return raw[0] + 1j*raw[1]
     def read(self, size):
+        """
+        read 'size' bytes of the LOFAR data
+        returns a tuple from the two polarizations
+        """
         z1 = np.zeros(size, dtype='i1')
         self.fh1.Iread([z1, MPI.BYTE])
         z2 = np.zeros(size, dtype='i1')
@@ -247,10 +325,8 @@ class LOFARdata(multifile):
         self.fh2.Close()
 
     def __repr__(self):
-        return ("<open multifile lofar files {} and {}>"
-                .format(self.fname1, self.fname2))
-
-_lofar_dtypes = {'float':'>f4', 'int8':'>i1'}
+        return ("<open lofar polarization pair {} and {}>"
+                .format(os.path.basename(self.fname1), os.path.basename(self.fname2)))
 
 # LOFAR defaults for psrfits HDUs
 _LOFAR_defs = {}

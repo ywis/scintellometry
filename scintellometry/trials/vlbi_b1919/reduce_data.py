@@ -19,6 +19,7 @@ _fref = 150. * u.MHz  # ref. freq. for dispersion measure
 
 
 def rfi_filter_raw(raw):
+    # note this should accomodate all data (including's lofar raw = complex)
     rawbins = raw.reshape(-1, raw.size)  # note, this is view!
     rawbins *= (rawbins.std(-1, keepdims=True) < MAX_RMS)
     return raw
@@ -29,6 +30,7 @@ def rfi_filter_power(power):
 
 
 def reduce(telescope, psr, date, nchan=None, ngate=None, nt=18, ntbin=12, fref=_fref,
+           rfi_filter_raw=rfi_filter_raw,
            do_waterfall=True, do_foldspec=True, dedisperse=None,verbose=True):
 
     comm = MPI.COMM_WORLD
@@ -60,12 +62,10 @@ def reduce(telescope, psr, date, nchan=None, ngate=None, nt=18, ntbin=12, fref=_
     waterfalls = []
     
     for idx, fname in enumerate(files):
-      with GenericOpen(*fname, recsize=4 * nchan * 2**16, comm=comm) as fh:
+      with GenericOpen(*fname, comm=comm) as fh:
         time0 = fh.time0
         phasepol = Obs[telescope][obskey].get_phasepol(time0)
-        # Aaron: I am not sure of ntint significance
-        # AROntint = fh.recsize*2//(2 * nchan)    # number of samples after FFT
-        ntint = fh.recsize//(4*nchan)
+        ntint = fh.ntint(nchan)
         ntw = min(10200, nt*ntint)  # number of samples to combine for waterfall
 
         samplerate = fh.samplerate
@@ -201,6 +201,7 @@ def CL_parser():
 if __name__ == '__main__':
     args = CL_parser()
     args.verbose = 0 if args.verbose is None else sum(args.verbose)
+    args.rfi_filter_raw = rfi_filter_raw
     if args.reduction_defaults == 'lofar':
         args.telescope = 'lofar'
         args.nchan = 20
@@ -212,6 +213,8 @@ if __name__ == '__main__':
         args.waterfall = False
         args.verbose += 1
         args.dedisperse = None
+        args.rfi_filter_raw = None
+
     elif args.reduction_defaults == 'aro':
         # do nothing, args are already set to aro.py defaults
         pass
@@ -221,8 +224,11 @@ if __name__ == '__main__':
         args.telescope = 'gmrt'
         args.psr = 'B1919+21'
         args.date = '2013-05-05' # Note, gmrt dates made up for now
+        args.rfi_filter_raw = None
+
     reduce(
         args.telescope, args.psr, args.date, 
         nchan=args.nchan, ngate=args.ngate, nt=args.nt, ntbin=args.ntbin,
+        rfi_filter_raw=args.rfi_filter_raw,
         do_waterfall=args.waterfall, do_foldspec=args.foldspec,
         dedisperse=args.dedisperse, verbose=args.verbose)

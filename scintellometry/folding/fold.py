@@ -3,13 +3,14 @@ from __future__ import division, print_function
 
 from inspect import getargspec
 import numpy as np
+import os
 import astropy.units as u
 
 try:
     import pyfftw
     pyfftw.interfaces.cache.enable()
     from pyfftw.interfaces.scipy_fftpack import rfft, rfftfreq, irfft, fft, ifft, fftfreq
-    _fftargs = {'threads': 2,
+    _fftargs = {'threads': os.environ.get('OMP_NUM_THREADS', 2),
                 'planner_effort': 'FFTW_ESTIMATE'}
 except(ImportError):
     print("Consider installing pyfftw: https://github.com/hgomersall/pyFFTW")
@@ -20,11 +21,6 @@ except(ImportError):
 from fromfile import fromfile
 
 dispersion_delay_constant = 4149. * u.s * u.MHz**2 * u.cm**3 / u.pc
-
-# size in bytes of records read from file (simple for ARO: 1 byte/sample)
-# double since we need to get ntint samples after FFT
-_bytes_per_sample = {np.int8: 2, '4bit': 1}
-NP_DTYPES = {'1bit': 'i1', '4bit': 'i1', 'nibble': 'i1'}
 
 def fold(fh, comm, dtype, samplerate, fedge, fedge_at_top, nchan,
          nt, ntint, nskip, ngate, ntbin, ntw, dm, fref, phasepol,
@@ -93,29 +89,28 @@ def fold(fh, comm, dtype, samplerate, fedge, fedge_at_top, nchan,
     nwsize = nt*ntint//ntw
     waterfall = np.zeros((nchan, nwsize))
 
-    # size in bytes of records read from file (simple for ARO: 1 byte/sample)
-    # double since we need to get ntint samples after FFT
-    # Marten: double-check this part
-    itemsize = _bytes_per_sample.get(dtype, None)
-    if itemsize is None:
-        itemsize = np.dtype(dtype).itemsize
-
     count = nchan*ntint
-    recsize = count*itemsize
+    itemsize = fh.itemsize
+#    recsize = count*itemsize
     if verbose and rank == 0:
         print('Reading from {}'.format(fh))
 
     if nskip > 0:
         if verbose and rank == 0:
             print('Skipping {0} records = {1} bytes'
-                  .format(nskip, nskip*recsize))
+                  .format(nskip, nskip*fh.recsize))
         if size == 1:
             # MPI: only skip here if we are not threaded, otherwise seek in for-loop
-            fh.seek(nskip * fh.recsize)
+            fh.seek(nskip * count * itemsize)
 
-    dt1 = (1./samplerate).to(u.s)
-    # need 2*nchan real-valued samples for each FFT
-    dtsample = nchan * 2 * dt1
+    # LOFAR data is already channelized
+    if hasattr(fh, 'fwidth'):
+       dtsample = (1./fh.fwidth).to(u.s)
+       dt1 = dtsample
+    else: 
+        dt1 = (1./samplerate).to(u.s)
+        # need 2*nchan real-valued samples for each FFT
+        dtsample = nchan * 2 * dt1
     tstart = dtsample * ntint * nskip
 
     # set up FFT functions: real vs complex fft's
@@ -129,14 +124,19 @@ def fold(fh, comm, dtype, samplerate, fedge, fedge_at_top, nchan,
         thisfftfreq = fftfreq
 
     # pre-calculate time delay due to dispersion in coarse channels
-    print("R", fedge, fh)
-    if fedge_at_top:
-        freq = fedge - thisfftfreq(nchan*2, dt1.value) * u.Hz
+    # LOFAR data is already channelized
+    if hasattr(fh, 'freqs'):
+        freq = fh.freqs
     else:
-        freq = fedge + thisfftfreq(nchan*2, dt1.value) * u.Hz
+        if fedge_at_top:
+            freq = fedge - thisfftfreq(nchan*2, dt1.value) * u.Hz
+        else:
+            freq = fedge + thisfftfreq(nchan*2, dt1.value) * u.Hz
   
     if fh.real_data:
+        # ARO data
         # [::2] sets frequency channels to numerical recipes ordering
+        # or, rfft has an unusual ordering
         dt = (dispersion_delay_constant * dm *
                  (1./freq[::2]**2 - 1./fref**2)).to(u.s).value
     else:
@@ -145,10 +145,15 @@ def fold(fh, comm, dtype, samplerate, fedge, fedge_at_top, nchan,
 
     if dedisperse in ['coherent', 'by-channel']:
         # pre-calculate required turns due to dispersion
-        if fedge_at_top:
-            fcoh = fedge - thisfftfreq(nchan*2*ntint, dt1.value) * u.Hz
+        if hasattr(fh, 'freqs'):
+            fcoh = (freq[np.newaxis,:] +
+                    fftfreq(ntint, dtsample.value)[:,np.newaxis] * u.Hz)
         else:
-            fcoh = fedge + thisfftfreq(nchan*2*ntint, dt1.value) * u.Hz
+            if fedge_at_top:
+                fcoh = fedge - thisfftfreq(nchan*2*ntint, dt1.value) * u.Hz
+            else:
+                fcoh = fedge + thisfftfreq(nchan*2*ntint, dt1.value) * u.Hz
+
         # set frequency relative to which dispersion is coherently corrected
         if dedisperse == 'coherent':
             _fref = fref
@@ -159,11 +164,16 @@ def fold(fh, comm, dtype, samplerate, fedge, fedge_at_top, nchan,
         # Lorimer & Kramer, Handbook of Pulsar Astrono
         dang = (dispersion_delay_constant * dm * fcoh *
                 (1./_fref-1./fcoh)**2) * 360. * u.deg
-        # order of frequencies is r[0], r[1],i[1],...r[n-1],i[n-1],r[n]
-        # for 0 and n need only real part, but for 1...n-1 need real, imag
-        # so just get shifts for r[1], r[2], ..., r[n-1]
-        dang = dang.to(u.rad).value[1:-1:2]
+
+        if fh.real_data:
+            # order of frequencies is r[0], r[1],i[1],...r[n-1],i[n-1],r[n]
+            # for 0 and n need only real part, but for 1...n-1 need real, imag
+            # so just get shifts for r[1], r[2], ..., r[n-1]
+            dang = dang.to(u.rad).value[1:-1:2]
+        else:
+            dang = dang.to(u.rad).value
         dd_coh = np.exp(dang * 1j).conj().astype(np.complex64)
+
 
     for j in xrange(rank, nt, size):
         if verbose and j % progress_interval == 0:
@@ -173,29 +183,19 @@ def fold(fh, comm, dtype, samplerate, fedge, fedge_at_top, nchan,
         # just in case numbers were set wrong -- break if file ends
         # better keep at least the work done
         try:
-            
-            # MPI processes do a slinky-read
+            # MPI processes read like a slinky
             if size > 1:
-                fh.seek(nskip*recsize + j*recsize*itemsize)
-            
-            # LOFAR still operates differently: read returns a tuple of data for each polarization
-            if fh.telescope == 'lofar':
-                raw = [np.fromstring(r, dtype=dtype, count=count).reshape(-1, nchan)
-                          for r in fh.read(count * np.dtype(dtype).itemsize)]
-                raw = raw[0] + 1j*raw[1]
-                #raw2 = fromfile(fh.fh1, dtype, count).reshape(-1,nchan)
-                #raw2 = fromfile(fh.fh2, dtype, count).reshape(-1,nchan)
-            else:
-                # data just a series of bytes, each containing one 8 bit or
-                # two 4-bit samples (set by dtype in caller)
-                raw = fromfile(fh, dtype, recsize)
+                fh.seek( (nskip+j) * count * itemsize)
+
+            # ARO/GMRT return int-stream, LOFAR returns complex64 (count/nchan, nchan)
+            raw = fh.record_read(count)
         except(EOFError, IOError) as exc:
             print("Hit {}; writing pgm's".format(exc))
             break
         if verbose >= 2:
             print("Read {} items".format(raw.size), end="")
 
-        if rfi_filter_raw:
+        if rfi_filter_raw is not None:
             raw = rfi_filter_raw(raw)
             if verbose >= 2:
                 print("... raw RFI", end="")
@@ -218,7 +218,6 @@ def fold(fh, comm, dtype, samplerate, fedge, fedge_at_top, nchan,
 
         if fh.telescope == 'lofar':
             power = vals.real**2 + vals.imag**2
-
         else:
             chan2 = thisfft(vals.reshape(-1, nchan*2), axis=-1,
                          overwrite_x=True, **_fftargs)**2
@@ -229,7 +228,7 @@ def fold(fh, comm, dtype, samplerate, fedge, fedge_at_top, nchan,
         if verbose >= 2:
             print("... power", end="")
 
-        if rfi_filter_power:
+        if rfi_filter_power is not None:
             power = rfi_filter_power(power)
             print("... power RFI", end="")
 
@@ -295,9 +294,9 @@ class Folder(dict):
             
         # get some defaults from fh (may be overwritten by kwargs)
         self['dtype'] = fh.dtype
-        self['samplerate'] = (1./fh['SUBINT'].header['TBIN']*u.Hz).to(u.MHz)
+        self['samplerate'] = fh.samplerate #(1./fh['SUBINT'].header['TBIN']*u.Hz).to(u.MHz)
         self['fedge'] = fh.fedge
-        self['fedge_at_top'] = fh.fedge
+        self['fedge_at_top'] = fh.fedge_at_top
         self['nchan'] = fh['SUBINT'].header['NCHAN']
         self['ngate'] = fh['SUBINT'].header['NBIN_PRD']
 
