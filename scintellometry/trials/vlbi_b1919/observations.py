@@ -59,7 +59,8 @@ class telescope(dict):
         The output depends on the telescope
         """
         seq = {'aro':self._aro_seq_raw_files,
-               'lofar':self._lofar_file}
+               'lofar':self._lofar_file,
+               'gmrt':self._gmrt_twofiles}
         return seq[self['name']](key, **kwargs)
 
     def _aro_seq_raw_files(self, key):
@@ -75,7 +76,7 @@ class telescope(dict):
         seq_file = (self['seq_filetmplt'].format(fnbase, disk_no[0], node, dt))
         raw_files = [self['raw_filestmplt'].format(fnbase, disk_no[i], node, dt, i)
                      for i in range(3)]
-        return seq_file, raw_files
+        return [[seq_file, raw_files]]
 
     def _lofar_file(self, key):
         """
@@ -97,7 +98,19 @@ class telescope(dict):
             files.append((file1, file2))
         return files
 
-        
+    def _gmrt_twofiles(self, key):
+        """"
+        return a 2-tuple for GMRT observation 'key':
+        (timestamp file, [file1, file2])
+        """
+        obs = self[key]
+        fnbase = obs.get('fnbase', self.get('fnbase', None))
+        file_fmt = obs.get('file_fmt', self.get('file_fmt', None))
+        pol = obs.get('pol', self.get('pol', None))
+        file1 = file_fmt.format(fnbase, pol, 1)
+        file2 = file_fmt.format(fnbase, pol, 2)
+        timestamps = file1.split('.Pol')[0] + '.timestamp'
+        return [[timestamps, [file1, file2]]]
         
 
 class observation(dict):

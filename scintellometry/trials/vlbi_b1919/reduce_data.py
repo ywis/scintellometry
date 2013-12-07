@@ -8,7 +8,7 @@ from astropy.time import Time
 
 from scintellometry.folding.fold import Folder, normalize_counts
 from scintellometry.folding.pmap import pmap
-from scintellometry.folding.filehandlers import AROdata, LOFARdata
+from scintellometry.folding.filehandlers import AROdata, LOFARdata, GMRTdata
 
 from observations import obsdata
 
@@ -29,7 +29,7 @@ def rfi_filter_power(power):
     return np.clip(power, 0., MAX_RMS**2 * power.shape[-1])
 
 
-def reduce(telescope, psr, date, nchan=None, ngate=None, nt=18, ntbin=12, fref=_fref,
+def reduce(telescope, psr, date, nchan, ngate, nt, ntbin, ntw_min=10200, fref=_fref,
            rfi_filter_raw=rfi_filter_raw,
            do_waterfall=True, do_foldspec=True, dedisperse=None,verbose=True):
 
@@ -43,17 +43,15 @@ def reduce(telescope, psr, date, nchan=None, ngate=None, nt=18, ntbin=12, fref=_
 
     # find nearest observation to 'date'
     obskey = Obs[telescope].nearest_observation(date)
-    
+   
+    files = Obs[telescope].file_list(obskey)
     if telescope == 'aro':
-        files = [Obs[telescope].file_list(obskey)]
         GenericOpen = AROdata
-
     elif telescope == 'lofar':
-        files = Obs[telescope].file_list(obskey)
         GenericOpen = LOFARdata
-    else:
-        raise NotImplementedError
-    
+    elif telescope == 'gmrt':
+        GenericOpen = GMRTdata
+
     # need to fix for lofar and gmrt
     node = Obs[telescope]['node']
 
@@ -62,11 +60,12 @@ def reduce(telescope, psr, date, nchan=None, ngate=None, nt=18, ntbin=12, fref=_
     waterfalls = []
     
     for idx, fname in enumerate(files):
+      print("IDX",idx, fname)
       with GenericOpen(*fname, comm=comm) as fh:
         time0 = fh.time0
         phasepol = Obs[telescope][obskey].get_phasepol(time0)
         ntint = fh.ntint(nchan)
-        ntw = min(10200, nt*ntint)  # number of samples to combine for waterfall
+        ntw = min(ntw_min, nt*ntint)  # number of samples to combine for waterfall
 
         samplerate = fh.samplerate
 
@@ -186,6 +185,9 @@ def CL_parser():
     w_parser = parser.add_argument_group("waterfall related parameters")
     w_parser.add_argument('-w','--waterfall', type=bool, default=True,
                         help="Produce a waterfall plot")
+    w_parser.add_argument('-nwm', '--ntw_min', type=int, default=10200,
+                          help="number of samples to combine for waterfall")
+
 
     d_parser = parser.add_argument_group("Dedispersion related parameters")
     d_parser.add_argument('--dedisperse', type=str, default=None,
@@ -210,6 +212,7 @@ if __name__ == '__main__':
         args.date = '2013-05-05' # Note, dates are made up for now
         args.nt = 180
         args.ntbin = 6
+        args.ntw_min = 10200
         args.waterfall = False
         args.verbose += 1
         args.dedisperse = None
@@ -223,12 +226,19 @@ if __name__ == '__main__':
         # to-do...
         args.telescope = 'gmrt'
         args.psr = 'B1919+21'
-        args.date = '2013-05-05' # Note, gmrt dates made up for now
+        args.date = '2013-07-26' # Note, gmrt dates made up for now
+        args.nchan = 512
+        args.ngate = 512
+        args.nt = 500 # 5 min/16.667 MHz=2400*(recsize / 2)
+        args.ntbin = 5 
+        args.ntw_min = 170 # 170 /(100.*u.MHz/6.) * 512 = 0.0052224 s = 256 bins/pulse
         args.rfi_filter_raw = None
+        args.waterfall = True
+        args.dedisperse = 'incoherent'
 
     reduce(
         args.telescope, args.psr, args.date, 
-        nchan=args.nchan, ngate=args.ngate, nt=args.nt, ntbin=args.ntbin,
+        nchan=args.nchan, ngate=args.ngate, nt=args.nt, ntbin=args.ntbin, ntw_min=args.ntw_min,
         rfi_filter_raw=args.rfi_filter_raw,
         do_waterfall=args.waterfall, do_foldspec=args.foldspec,
         dedisperse=args.dedisperse, verbose=args.verbose)

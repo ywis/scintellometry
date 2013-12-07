@@ -92,7 +92,7 @@ if __name__ == '__main__':
     ntint = recsize*2//(2 * nchan)  # number of samples after FFT
     # total_size = sum(os.path.getsize(fil) for fil in raw_files)
     # nt = total_size // recsize
-    nt = 1800  # each 32MB set has 2*2**25/2e8=0.33554432 s, so 180 -> ~1 min
+    nt = 18#00  # each 32MB set has 2*2**25/2e8=0.33554432 s, so 180 -> ~1 min
 
     nskip = 0
 

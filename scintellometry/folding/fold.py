@@ -107,11 +107,19 @@ def fold(fh, comm, dtype, samplerate, fedge, fedge_at_top, nchan,
     if hasattr(fh, 'fwidth'):
        dtsample = (1./fh.fwidth).to(u.s)
        dt1 = dtsample
-    else: 
+    else:
+        #ARO data
         dt1 = (1./samplerate).to(u.s)
         # need 2*nchan real-valued samples for each FFT
         dtsample = nchan * 2 * dt1
-    tstart = dtsample * ntint * nskip
+    
+    if fh.telescope == 'gmrt':
+        # but include 2*nchan real-valued samples used for each FFT
+        # (or, equivalently, real and imag for channels)
+        tstart = dt1 * nskip * count * itemsize
+    elif fh.telescope in ['aro', 'lofar']:
+        # need 2*nchan real-valued samples for each FFT for ARO
+        tstart = dtsample * ntint * nskip
 
     # set up FFT functions: real vs complex fft's
     if fh.real_data:
@@ -189,6 +197,8 @@ def fold(fh, comm, dtype, samplerate, fedge, fedge_at_top, nchan,
 
             # ARO/GMRT return int-stream, LOFAR returns complex64 (count/nchan, nchan)
             raw = fh.record_read(count)
+#            print("READ",j, fh.index, fh.fh_raw[fh.sequence['raw'][fh.index]].Get_position(), rank, size)
+
         except(EOFError, IOError) as exc:
             print("Hit {}; writing pgm's".format(exc))
             break
@@ -202,8 +212,11 @@ def fold(fh, comm, dtype, samplerate, fedge, fedge_at_top, nchan,
 
         if fh.telescope == 'lofar':
             vals = raw
-        else:
+        elif fh.telescope == 'aro':
             vals = raw.astype(np.float32)
+        elif fh.telescope == 'gmrt':
+            # data just a series of byte pairs, of real and imag
+            vals = raw.astype(np.float32).view(np.complex64).squeeze()
 
         if dedisperse in ['coherent', 'by-channel']:
             fine = thisfft(vals, axis=0, overwrite_x=True, **_fftargs)
@@ -218,13 +231,17 @@ def fold(fh, comm, dtype, samplerate, fedge, fedge_at_top, nchan,
 
         if fh.telescope == 'lofar':
             power = vals.real**2 + vals.imag**2
-        else:
+        elif fh.telescope == 'aro':
             chan2 = thisfft(vals.reshape(-1, nchan*2), axis=-1,
                          overwrite_x=True, **_fftargs)**2
             # rfft: Re[0], Re[1], Im[1], ..., Re[n/2-1], Im[n/2-1], Re[n/2]
             # re-order to Num.Rec. format: Re[0], Re[n/2], Re[1], ....
             power = np.hstack((chan2[:,:1]+chan2[:,-1:],
                                chan2[:,1:-1].reshape(-1,nchan-1,2).sum(-1)))
+        elif fh.telescope == 'gmrt':
+            chan = vals.reshape(-1, nchan)
+            power = chan.real**2+chan.imag**2
+
         if verbose >= 2:
             print("... power", end="")
 

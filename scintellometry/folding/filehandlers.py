@@ -8,7 +8,7 @@ import re
 
 from astropy.table import Table
 from astropy import units as u
-from astropy.time import Time
+from astropy.time import Time, TimeDelta
 from fromfile import fromfile
 from h5py import File as HDF5File
 from mpi4py import MPI
@@ -358,6 +358,145 @@ _LOFAR_defs['SUBINT']  = {'INT_TYPE': 'TIME',
                         'DM':0, 'RM':0, 'NCHNOFFS':0,
                         'NSBLK':1}
 
+#    ____  ___ ___  ____  ______ 
+#   /    ||   |   ||    \|      |
+#  |   __|| _   _ ||  D  )      |
+#  |  |  ||  \_/  ||    /|_|  |_|
+#  |  |_ ||   |   ||    \  |  |  
+#  |     ||   |   ||  .  \ |  |  
+#  |___,_||___|___||__|\_| |__|  
+#                            
+class GMRTdata(multifile):
+    def __init__(self, timestamp_file, files, setsize=2**22,
+                 utc_offset=TimeDelta(5.5*3600, format='sec'), comm=None):
+        super(GMRTdata, self).__init__(hdus=['SUBINT'])
+        self.set_hdu_defaults(_LOFAR_defs)
+        self.telescope = 'gmrt'
+        if comm is None:
+            self.comm = MPI.COMM_SELF
+        else:
+            self.comm = comm
+
+        self.timestamp_file = timestamp_file
+        self.indices, self.timestamps, self.gsb_start = read_timestamp_file(
+            timestamp_file, utc_offset)
+        self.fh_raw = [MPI.File.Open(self.comm, raw, amode=MPI.MODE_RDONLY) for raw in files]
+        self.setsize = setsize
+        self.recsize = setsize
+        self.index = 0
+
+        # parameters for fold:
+        self.samplerate = 100.*u.MHz / 3.
+        self.fedge = 156. * u.MHz
+        self.fedge_at_top = True
+        self.time0 = self.timestamps[0]
+        # GMRT time is off by 1 second
+        self.time0 -= (2.**24/(100*u.MHz/6.)).to(u.s)
+        self.dtype = np.int8
+        self.itemsize = {np.int8: 2}[self.dtype]
+        self.real_data = False
+
+    def ntint(self, nchan):
+        return self.setsize // (2*nchan)
+
+    def seek(self, offset):
+        assert offset % self.recsize == 0
+        self.index = offset // self.recsize
+        for i, fh in enumerate(self.fh_raw):
+            fh.Seek(np.count_nonzero(self.indices[:self.index] == i) *
+                    self.recsize)
+
+    def nskip(self, date, time0=None):
+        """
+        return the number of records needed to skip from start of
+        file to iso timestamp 'date'.
+
+        Optionally:
+        time0 : use this start time instead of self.time0
+                either a astropy.time.Time object or string in 'utc'
+
+        """
+        if time0 is None:
+            time0 = self.time0
+        elif isinstance(time0, str):
+            time0 = Time(time0, scale='utc')
+
+        dt = (Time(date, scale='utc')-time0)
+        nskip = int(round( (dt/(self.recsize / self.samplerate))
+                    .to(u.dimensionless_unscaled)))
+        return nskip
+
+
+    def close(self):
+        for fh in self.fh_raw:
+            fh.Close()
+
+    def record_read(self, count):
+        return fromfile(self, self.dtype, count*self.itemsize)
+
+    def read(self, size):
+        assert size == self.recsize
+        if self.index == len(self.indices):
+            raise EOFError
+        self.index += 1
+        # print('reading from {}, t={}'.format(
+        #     self.fh_raw[self.indices[self.index-1]],
+        #     self.timestamps[self.index-1]))
+        z = np.zeros(size, dtype='i1')
+        self.fh_raw[self.indices[self.index-1]].Iread(z)
+        return z
+
+    @property
+    def time(self):
+        return self.timestamps[self.index]
+
+    def __repr__(self):
+        return ("<open two raw_voltage_files {} "
+                "using timestamp file '{}' at index {} (time {})>"
+                .format(self.fh_raw, self.timestamp_file, self.index,
+                        self.timestamps[self.index]))
+
+
+
+def read_timestamp_file(filename, utc_offset):
+    pc_times = []
+    gps_times = []
+    ist_utc = TimeDelta(utc_offset)
+    prevseq = prevsub = -1
+    with open(filename) as fh:
+        line = fh.readline()
+        while line != '':
+            strings = ('{}-{}-{}T{}:{}:{} {} {}-{}-{}T{}:{}:{} {} {} {}'
+                       .format(*line.split())).split()
+            seq = int(strings[4])
+            sub = int(strings[5])
+            if prevseq > 0:
+                assert seq == prevseq+1
+                assert sub == (prevsub+1) % 8
+            prevseq, prevsub = seq, sub
+
+            time = (Time([strings[0], strings[2]], scale='utc') +
+                    TimeDelta([float(strings[1]), float(strings[3])],
+                              format='sec')) - ist_utc
+            pc_times += [time[0]]
+            gps_times += [time[1]]  # add half a step below
+
+            line = fh.readline()
+
+    indices = np.array(len(gps_times)*[0, 1], dtype=np.int8)
+
+    pc_times = Time(pc_times)
+    gps_times = Time(gps_times)
+    gps_pc = gps_times - pc_times
+    assert np.allclose(gps_pc.sec, gps_pc[0].sec, atol=1.e-3)
+    dt = gps_times[1:] - gps_times[:-1]
+    assert np.allclose(dt.sec, dt[0].sec, atol=1.e-5)
+    gsb_start = gps_times[-1] - seq * dt[0]  # should be whole minute
+    assert '00.000' in gsb_start.isot
+
+    timestamps = Time([t + i * dt[0] / 2. for t in gps_times for i in (0,1)])
+
+    return indices, timestamps, gsb_start
 
 
 #   __ __  ______  ____  _     _____
