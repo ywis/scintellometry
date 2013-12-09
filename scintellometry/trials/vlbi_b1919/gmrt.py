@@ -101,7 +101,7 @@ if __name__ == '__main__':
 
         else:
             nskip = 0
-        foldspec2, waterfall = fold(fh1, np.int8, samplerate,
+        myfoldspec, myicount, mywaterfall = fold(fh1, np.int8, samplerate,
                                     fedge, fedge_at_top, nchan,
                                     nt, ntint, nskip,
                                     ngate, ntbin, ntw, dm, fref, phasepol,
@@ -111,21 +111,31 @@ if __name__ == '__main__':
                                     verbose=verbose, progress_interval=1)
 
     if do_waterfall:
-        np.save("gmrt{0}waterfall_{1}.npy".format(psr, pol), waterfall)
+        waterfall = np.zeros_like(mywaterfall)
+        comm.Reduce(mywaterfall, waterfall, op=MPI.SUM, root=0)
+        if comm.rank == 0:
+            waterfall = normalize_counts(waterfall)
+            np.save("gmrt{0}waterfall_{1}.npy".format(psr, pol), waterfall)
 
     if do_foldspec:
-        np.save("gmrt{0}foldspec2_{1}".format(psr, pol), foldspec2)
-        f2 = foldspec2.copy()
-        foldspec1 = f2.sum(axis=2)
-        fluxes = foldspec1.sum(axis=0)
-        foldspec3 = f2.sum(axis=0)
+        foldspec = np.zeros_like(myfoldspec)
+        comm.Reduce(myfoldspec, foldspec, op=MPI.SUM, root=0)
+        icount = np.zeros_like(myicount)
+        comm.Reduce(myicount, icount, op=MPI.SUM, root=0)
+        if comm.rank == 0:
+            foldspec2 = normalize_counts(foldspec, icount)
+            np.save("gmrt{0}foldspec2_{1}".format(psr, pol), foldspec2)
+            f2 = foldspec2.copy()
+            foldspec1 = f2.sum(axis=2)
+            fluxes = foldspec1.sum(axis=0)
+            foldspec3 = f2.sum(axis=0)
 
-        with open('gmrt{0}flux_{1}.dat'.format(psr, pol), 'w') as f:
-            for i, flux in enumerate(fluxes):
-                f.write('{0:12d} {1:12.9g}\n'.format(i+1, flux))
+            with open('gmrt{0}flux_{1}.dat'.format(psr, pol), 'w') as f:
+                for i, flux in enumerate(fluxes):
+                    f.write('{0:12d} {1:12.9g}\n'.format(i+1, flux))
 
     plots = True
-    if plots:
+    if plots and comm.rank == 0:
         if do_waterfall:
             w = waterfall.copy()
             pmap('gmrt{0}waterfall_{1}.pgm'.format(psr, pol),
@@ -137,3 +147,17 @@ if __name__ == '__main__':
                  f2.transpose(0,2,1).reshape(nchan,-1), 1, verbose)
             pmap('gmrt{0}folded3_{1}.pgm'.format(psr, pol),
                  foldspec3, 0, verbose)
+
+def normalize_counts(q, count=None):
+    """ normalize routines for waterfall and foldspec data """
+    if count is None:
+        nonzero = np.isclose(q, np.zeros_like(q)) # == 0.
+        qn = q
+    else:
+        nonzero = count > 0
+        qn = np.where(nonzero, q/count, 0.)
+    qn -= np.where(nonzero,
+                   np.sum(qn, 1, keepdims=True) /
+                   np.sum(nonzero, 1, keepdims=True), 0.)
+    return qn
+

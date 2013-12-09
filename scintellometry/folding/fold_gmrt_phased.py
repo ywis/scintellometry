@@ -2,13 +2,12 @@
 from __future__ import division, print_function
 
 import numpy as np
+import os
 try:
     import pyfftw
     pyfftw.interfaces.cache.enable()
     from pyfftw.interfaces.scipy_fftpack import fft, fftfreq, ifft, fftshift
-    import multiprocessing
-    _NTHREADS = min(4, multiprocessing.cpu_count())
-    _fftargs = {'threads': _NTHREADS,
+    _fftargs = {'threads': os.environ.get('OMP_NUM_THREADS', 2),
                 'planner_effort': 'FFTW_ESTIMATE'}
 except(ImportError):
     print("Consider installing pyfftw: https://github.com/hgomersall/pyFFTW")
@@ -26,7 +25,7 @@ def fold(fh1, dtype, samplerate, fedge, fedge_at_top, nchan,
          nt, ntint, nskip, ngate, ntbin, ntw, dm, fref, phasepol,
          dedisperse='incoherent',
          do_waterfall=True, do_foldspec=True, verbose=True,
-         progress_interval=100):
+         progress_interval=100, comm=None):
     """FFT GMRT data, fold by phase/time and make a waterfall series
 
     Parameters
@@ -72,7 +71,14 @@ def fold(fh1, dtype, samplerate, fedge, fedge_at_top, nchan,
         whether to give some progress information (default: True)
     progress_interval : int
         Ping every progress_interval sets
+    comm : MPI communicator (default: None)
     """
+    if comm is None:
+        rank = 0
+        size = 1
+    else:
+        rank = comm.rank
+        size = comm.size
 
     # initialize folded spectrum and waterfall
     foldspec2 = np.zeros((nchan, ngate, ntbin))
@@ -90,10 +96,11 @@ def fold(fh1, dtype, samplerate, fedge, fedge_at_top, nchan,
     if nskip > 0:
         if verbose:
             print('Skipping {0} {1}-byte records'.format(nskip, recsize))
-        fh1.seek(nskip * recsize)
+        if size == 1:
+            fh1.seek(nskip * recsize)
 
-    foldspec = np.zeros((nchan, ngate), dtype=np.int)
-    icount = np.zeros((nchan, ngate), dtype=np.int)
+    foldspec = np.zeros((nchan, ngate, ntbin), dtype=np.int)
+    icount = np.zeros((nchan, ngate, ntbin), dtype=np.int)
 
     dt1 = (1./samplerate).to(u.s)
     # but include 2*nchan real-valued samples used for each FFT
@@ -130,7 +137,7 @@ def fold(fh1, dtype, samplerate, fedge, fedge_at_top, nchan,
     #     dang = dang.to(u.rad).value[1:-1:2]
     #     dd_coh = np.exp(dang * 1j).conj().astype(np.complex64)
 
-    for j in xrange(nt):
+    for j in xrange(rank, nt, size):
         if verbose and j % progress_interval == 0:
             print('Doing {:6d}/{:6d}; time={:18.12f}'.format(
                 j+1, nt, (tstart+dtsample*j*ntint).value))   # time since start
@@ -138,6 +145,8 @@ def fold(fh1, dtype, samplerate, fedge, fedge_at_top, nchan,
         # just in case numbers were set wrong -- break if file ends
         # better keep at least the work done
         try:
+            if size > 1:
+                fh1.seek((nskip + j) * recsize)
             # data just a series of byte pairs, of real and imag
             raw = fromfile(fh1, dtype, recsize)
         except(EOFError, IOError) as exc:
@@ -175,6 +184,8 @@ def fold(fh1, dtype, samplerate, fedge, fedge_at_top, nchan,
         if do_foldspec:
             tsample = (tstart + isr*dtsample).value  # times since start
 
+            ibin = j*ntbin//nt  # bin in the time series: 0..ntbin-1
+
             for k in xrange(nchan):
                 if dedisperse == 'coherent':
                     t = tsample  # already dedispersed
@@ -185,14 +196,13 @@ def fold(fh1, dtype, samplerate, fedge, fedge_at_top, nchan,
                 iphase = np.remainder(phase*ngate,
                                       ngate).astype(np.int)
                 # sum and count samples by phase bin
-                foldspec[k] += np.bincount(iphase, power[:,k], ngate)
-                icount[k] += np.bincount(iphase, None, ngate)
+                foldspec[k,:,ibin] += np.bincount(iphase, power[:,k], ngate)
+                icount[k,:,ibin] += np.bincount(iphase, None, ngate)
 
             if verbose == 'very':
                 print("... folded", end="")
 
-            ibin = j*ntbin//nt  # bin in the time series: 0..ntbin-1
-            if (j+1)*ntbin//nt > ibin:  # last addition to bin?
+            if 0: #done in gmrt.py (j+1)*ntbin//nt > ibin:  # last addition to bin?
                 # get normalised flux in each bin (where any were added)
                 nonzero = icount > 0
                 nfoldspec = np.where(nonzero, foldspec/icount, 0.)
@@ -212,10 +222,10 @@ def fold(fh1, dtype, samplerate, fedge, fedge_at_top, nchan,
     if verbose:
         print('read {0:6d} out of {1:6d}'.format(j+1, nt))
 
-    if do_waterfall:
+    if 0: # done in gmrt.py do_waterfall:
         nonzero = waterfall == 0.
         waterfall -= np.where(nonzero,
                               np.sum(waterfall, 1, keepdims=True) /
                               np.sum(nonzero, 1, keepdims=True), 0.)
 
-    return foldspec2, waterfall
+    return foldspec, icount, waterfall
