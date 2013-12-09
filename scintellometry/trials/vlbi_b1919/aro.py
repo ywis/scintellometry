@@ -92,7 +92,7 @@ if __name__ == '__main__':
     ntint = recsize*2//(2 * nchan)  # number of samples after FFT
     # total_size = sum(os.path.getsize(fil) for fil in raw_files)
     # nt = total_size // recsize
-    nt = 18#00  # each 32MB set has 2*2**25/2e8=0.33554432 s, so 180 -> ~1 min
+    nt = 1800  # each 32MB set has 2*2**25/2e8=0.33554432 s, so 180 -> ~1 min
 
     nskip = 0
 
@@ -141,7 +141,7 @@ if __name__ == '__main__':
             nt, ntint, nskip, ngate, ntbin, ntw, dm, fref, phasepol,
             dedisperse=dedisperse, do_waterfall=do_waterfall,
             do_foldspec=do_foldspec, verbose=verbose, progress_interval=1,
-            rfi_filter_raw=rfi_filter_raw,
+            rfi_filter_raw=None,#rfi_filter_raw,
             rfi_filter_power=None)  # rfi_filter_power)
 
     if do_waterfall:
@@ -149,11 +149,11 @@ if __name__ == '__main__':
         waterfall -= np.where(nonzero,
                               np.sum(waterfall, 1, keepdims=True) /
                               np.sum(nonzero, 1, keepdims=True), 0.)
-        np.save("aro{0}waterfall_{1}.npy".format(psr, node), waterfall)
+        np.save("mm_aro{0}waterfall_{1}.npy".format(psr, node), waterfall)
 
     if do_foldspec:
-        np.save("aro{0}foldspec_{1}".format(psr, node), foldspec)
-        np.save("aro{0}icount_{1}".format(psr, node), icount)
+        np.save("mm_aro{0}foldspec_{1}".format(psr, node), foldspec)
+        np.save("mm_aro{0}icount_{1}".format(psr, node), icount)
         # get normalised flux in each bin (where any were added)
         nonzero = icount > 0
         f2 = np.where(nonzero, foldspec/icount, 0.)
@@ -165,7 +165,7 @@ if __name__ == '__main__':
         fluxes = foldspec1.sum(axis=0)
         foldspec3 = f2.sum(axis=0)
 
-        with open('aro{0}flux_{1}.dat'.format(psr, node), 'w') as f:
+        with open('mm_aro{0}flux_{1}.dat'.format(psr, node), 'w') as f:
             for i, flux in enumerate(fluxes):
                 f.write('{0:12d} {1:12.9g}\n'.format(i+1, flux))
 
@@ -173,12 +173,12 @@ if __name__ == '__main__':
     if plots:
         if do_waterfall:
             w = waterfall.copy()
-            pmap('aro{0}waterfall_{1}.pgm'.format(psr, node),
+            pmap('mm_aro{0}waterfall_{1}.pgm'.format(psr, node),
                  w, 1, verbose=True)
         if do_foldspec:
-            pmap('aro{0}folded_{1}.pgm'.format(psr, node),
+            pmap('mm_aro{0}folded_{1}.pgm'.format(psr, node),
                  foldspec1, 0, verbose)
-            pmap('aro{0}foldedbin_{1}.pgm'.format(psr, node),
+            pmap('mm_aro{0}foldedbin_{1}.pgm'.format(psr, node),
                  f2.transpose(0,2,1).reshape(nchan,-1), 1, verbose)
-            pmap('aro{0}folded3_{1}.pgm'.format(psr, node),
+            pmap('mm_aro{0}folded3_{1}.pgm'.format(psr, node),
                  foldspec3, 0, verbose)

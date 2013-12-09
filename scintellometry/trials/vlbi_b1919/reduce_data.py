@@ -32,7 +32,6 @@ def rfi_filter_power(power):
 def reduce(telescope, psr, date, nchan, ngate, nt, ntbin, ntw_min=10200, fref=_fref,
            rfi_filter_raw=rfi_filter_raw,
            do_waterfall=True, do_foldspec=True, dedisperse=None,verbose=True):
-
     comm = MPI.COMM_WORLD
     Obs = obsdata()
     
@@ -90,7 +89,7 @@ def reduce(telescope, psr, date, nchan, ngate, nt, ntbin, ntw_min=10200, fref=_f
                         phasepol=phasepol,
                         dedisperse=dedisperse, do_waterfall=do_waterfall,
                         do_foldspec=do_foldspec, verbose=verbose, progress_interval=1,
-                        rfi_filter_raw=rfi_filter_raw,
+                        rfi_filter_raw=None, #AARrfi_filter_raw,
                         rfi_filter_power=None)
         myfoldspec, myicount, mywaterfall = folder(fh, comm=comm)
         
@@ -109,8 +108,8 @@ def reduce(telescope, psr, date, nchan, ngate, nt, ntbin, ntw_min=10200, fref=_f
                 foldspecs.append(foldspec)
                 icounts.append(icount)
                 this_f = normalize_counts(foldspec, icount)
-                fname = ("{0}{1}foldspec_idx{2}_node{3}.npy")
-                iname = ("{0}{1}icount_idx{2}_node{3}.npy")
+                fname = ("rd_{0}{1}foldspec_idx{2}_node{3}.npy")
+                iname = ("rd_{0}{1}icount_idx{2}_node{3}.npy")
                 np.save(fname.format(telescope, psr, idx, node), foldspec)
                 np.save(iname.format(telescope, psr, idx, node), icount)
     # end file loop (mostly for lofar subbands)
@@ -118,14 +117,14 @@ def reduce(telescope, psr, date, nchan, ngate, nt, ntbin, ntw_min=10200, fref=_f
 
     if do_waterfall and  comm.rank == 0:
             waterfall = normalize_counts(np.concatenate(waterfalls, axis=0))
-            np.save("{0}{1}waterfall_{2}.npy"
+            np.save("rd_{0}{1}waterfall_{2}.npy"
                     .format(telescope, psr, node), waterfall)
 
     if do_foldspec and comm.rank == 0:
         foldspec = np.concatenate(foldspecs, axis=0)
         icount = np.concatenate(icounts, axis=0)
-        np.save("{0}{1}foldspec_{2}".format(telescope,psr, node), foldspec)
-        np.save("{0}{1}icount_{2}".format(telescope, psr, node), icount)
+        np.save("rd_{0}{1}foldspec_{2}".format(telescope,psr, node), foldspec)
+        np.save("rd_{0}{1}icount_{2}".format(telescope, psr, node), icount)
 
         # get normalized flux in each bin (where any were added)
         f2 = normalize_counts(foldspec, icount)
@@ -133,7 +132,7 @@ def reduce(telescope, psr, date, nchan, ngate, nt, ntbin, ntw_min=10200, fref=_f
         fluxes = foldspec1.sum(axis=0)
         foldspec3 = f2.sum(axis=0)
 
-        with open('{0}{1}flux_{2}.dat'.format(telescope, psr, node), 'w') as f:
+        with open('rd_{0}{1}flux_{2}.dat'.format(telescope, psr, node), 'w') as f:
             for i, flux in enumerate(fluxes):
                 f.write('{0:12d} {1:12.9g}\n'.format(i+1, flux))
 
@@ -141,14 +140,14 @@ def reduce(telescope, psr, date, nchan, ngate, nt, ntbin, ntw_min=10200, fref=_f
     if plots and comm.rank == 0:
         if do_waterfall:
             w = waterfall.copy()
-            pmap('{0}{1}waterfall_{2}.pgm'.format(telescope, psr, node),
+            pmap('rd_{0}{1}waterfall_{2}.pgm'.format(telescope, psr, node),
                  w, 1, verbose=True)
         if do_foldspec:
-            pmap('{0}{1}folded_{2}.pgm'.format(telescope, psr, node),
+            pmap('rd_{0}{1}folded_{2}.pgm'.format(telescope, psr, node),
                  foldspec1, 0, verbose)
-            pmap('{0}{1}foldedbin_{2}.pgm'.format(telescope, psr, node),
+            pmap('rd_{0}{1}foldedbin_{2}.pgm'.format(telescope, psr, node),
                  f2.transpose(0,2,1).reshape(nchan,-1), 1, verbose)
-            pmap('{0}{1}folded3_{2}.pgm'.format(telescope, psr, node),
+            pmap('rd_{0}{1}folded3_{2}.pgm'.format(telescope, psr, node),
                  foldspec3, 0, verbose)
 
 
