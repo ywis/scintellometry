@@ -29,19 +29,18 @@ def rfi_filter_power(power):
     return np.clip(power, 0., MAX_RMS**2 * power.shape[-1])
 
 
-def reduce(telescope, psr, date, nchan, ngate, nt, ntbin, ntw_min=10200, fref=_fref,
+def reduce(telescope, obsdate, tstart, tend, nchan, ngate, nt, ntbin, ntw_min=10200, fref=_fref,
            rfi_filter_raw=rfi_filter_raw,
            do_waterfall=True, do_foldspec=True, dedisperse=None,verbose=True):
     comm = MPI.COMM_WORLD
     Obs = obsdata()
-    
-    assert telescope in ['aro', 'lofar', 'gmrt']
+    # find nearest observation to 'date', warning if > 1s off requested start time of observation
+    obskey = Obs[telescope].nearest_observation(obsdate)
+    # target of this observation
+    psr = Obs[telescope][obskey]['src']
     assert psr in Obs['psrs'].keys()
 
     dm = Obs['psrs'][psr]['dm']
-
-    # find nearest observation to 'date'
-    obskey = Obs[telescope].nearest_observation(date)
    
     files = Obs[telescope].file_list(obskey)
     if telescope == 'aro':
@@ -59,17 +58,17 @@ def reduce(telescope, psr, date, nchan, ngate, nt, ntbin, ntw_min=10200, fref=_f
     waterfalls = []
     
     for idx, fname in enumerate(files):
-      print("IDX",idx, fname)
       with GenericOpen(*fname, comm=comm) as fh:
         time0 = fh.time0
         phasepol = Obs[telescope][obskey].get_phasepol(time0)
+        nt = fh.ntimebins(tstart, tend)
         ntint = fh.ntint(nchan)
         ntw = min(ntw_min, nt*ntint)  # number of samples to combine for waterfall
 
         samplerate = fh.samplerate
 
         # number of records to skip
-        nskip = fh.nskip('2013-07-25T22:15:00')    # number of records to skip
+        nskip = fh.nskip(tstart)    # number of records to skip
         if verbose and comm.rank == 0:
             print("Using start time {0} and phase polynomial {1}"
                   .format(time0, phasepol))
@@ -153,20 +152,27 @@ def reduce(telescope, psr, date, nchan, ngate, nt, ntbin, ntw_min=10200, fref=_f
 
 def CL_parser():
     parser = argparse.ArgumentParser(prog='reduce_data.py',
-                 description='dedisperse and fold data.',
+                 description='Process data, with options to dedisperse and fold.',
                  formatter_class=argparse.ArgumentDefaultsHelpFormatter)
     parser.add_argument('--reduction_defaults', type=str,
                         help="One of ['aro', 'lofar', 'gmrt'].\n"
                              "A convenience flag to set the default parameters as "
                              "configured in aro.py, lofar.py, gmrt.py")
-    parser.add_argument('-t','--telescope', type=str, default='aro',
+
+    d_parser = parser.add_argument_group("Data-related parameters. They specify "
+                   "which observation run to process (consistent with [telescope], [[date]] entries "
+                   "in observations.conf), at the start and finish timestamps.")
+    d_parser.add_argument('-t','--telescope', type=str, default='aro',
                         help="The data to reduce. One of ['aro', 'lofar', 'gmrt']." ) 
-    parser.add_argument('-d','--date', type=str, default='2013-07-25T18:14:20',
+    d_parser.add_argument('-d','--date', type=str, default='2013-07-25T18:14:20',
                         help="The date of the data to reduce"
                         "Recall observations.conf stores the observations"
                         "runs keyed by telescope and date.")
-    parser.add_argument('-p','--psr', type=str, default='B1919+21',
-                        help="The pulsar to dedisperse on.")
+    d_parser.add_argument('-t0', '--starttime', type=str, default='2013-07-25T22:15:00',
+                          help="Timestamp within the observation run to start processing.")
+    d_parser.add_argument('-t1', '--endtime', type=str, default='2013-07-25T22:20:00',
+                          help="Timestamp within the observation run to end processing. "
+                          "(replaces the 'nt' argument)")
     
 
     f_parser = parser.add_argument_group("folding related parameters")
@@ -176,19 +182,19 @@ def CL_parser():
                           help="Number of channels in folded spectrum.")
     f_parser.add_argument('-ng', '--ngate', type=int, default=512,
                           help="number of bins over the pulsar period.")
-    f_parser.add_argument('-nt', '--nt', type=int, default=1800,
-                          help="number of time bins to fold the data into. ")
+    #    f_parser.add_argument('-nt', '--nt', type=int, default=1800,
+    #                          help="number of time bins to fold the data into. ")
     f_parser.add_argument('-nb', '--ntbin', type=int, default=12,
                           help="number of time bins the time series is split into for folding. ")
 
-    w_parser = parser.add_argument_group("waterfall related parameters")
+    w_parser = parser.add_argument_group("Waterfall related parameters.")
     w_parser.add_argument('-w','--waterfall', type=bool, default=True,
                         help="Produce a waterfall plot")
     w_parser.add_argument('-nwm', '--ntw_min', type=int, default=10200,
                           help="number of samples to combine for waterfall")
 
 
-    d_parser = parser.add_argument_group("Dedispersion related parameters")
+    d_parser = parser.add_argument_group("Dedispersion related parameters.")
     d_parser.add_argument('--dedisperse', type=str, default=None,
                         help="One of ['None', 'coherent', 'by-channel'].")
     d_parser.add_argument('--fref', type=float, default=_fref,
@@ -207,9 +213,8 @@ if __name__ == '__main__':
         args.telescope = 'lofar'
         args.nchan = 20
         args.ngate =  512
-        args.psr = 'B1919+21'
         args.date = '2013-05-05' # Note, dates are made up for now
-        args.nt = 180
+        #args.nt = 180
         args.ntbin = 6
         args.ntw_min = 10200
         args.waterfall = False
@@ -224,11 +229,10 @@ if __name__ == '__main__':
     elif args.reduction_defaults == 'gmrt':
         # to-do...
         args.telescope = 'gmrt'
-        args.psr = 'B1919+21'
         args.date = '2013-07-26' # Note, gmrt dates made up for now
         args.nchan = 512
         args.ngate = 512
-        args.nt = 500 # 5 min/16.667 MHz=2400*(recsize / 2)
+        #args.nt = 500 # 5 min/16.667 MHz=2400*(recsize / 2)
         args.ntbin = 5 
         args.ntw_min = 170 # 170 /(100.*u.MHz/6.) * 512 = 0.0052224 s = 256 bins/pulse
         args.rfi_filter_raw = None
@@ -236,8 +240,8 @@ if __name__ == '__main__':
         args.dedisperse = 'incoherent'
 
     reduce(
-        args.telescope, args.psr, args.date, 
-        nchan=args.nchan, ngate=args.ngate, nt=args.nt, ntbin=args.ntbin, ntw_min=args.ntw_min,
+        args.telescope, args.date, tstart=args.t0, tend=args.t1,
+        nchan=args.nchan, ngate=args.ngate, ntbin=args.ntbin, ntw_min=args.ntw_min,
         rfi_filter_raw=args.rfi_filter_raw,
         do_waterfall=args.waterfall, do_foldspec=args.foldspec,
         dedisperse=args.dedisperse, verbose=args.verbose)

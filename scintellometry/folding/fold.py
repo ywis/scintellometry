@@ -122,7 +122,7 @@ def fold(fh, comm, dtype, samplerate, fedge, fedge_at_top, nchan,
         tstart = dtsample * ntint * nskip
 
     # set up FFT functions: real vs complex fft's
-    if fh.real_data:
+    if fh.telescope == 'aro':
         thisfft = rfft
         thisifft = irfft
         thisfftfreq = rfftfreq
@@ -141,7 +141,7 @@ def fold(fh, comm, dtype, samplerate, fedge, fedge_at_top, nchan,
         else:
             freq = fedge + thisfftfreq(nchan*2, dt1.value) * u.Hz
   
-    if fh.real_data:
+    if fh.telescope == 'aro':
         # ARO data
         # [::2] sets frequency channels to numerical recipes ordering
         # or, rfft has an unusual ordering
@@ -173,7 +173,7 @@ def fold(fh, comm, dtype, samplerate, fedge, fedge_at_top, nchan,
         dang = (dispersion_delay_constant * dm * fcoh *
                 (1./_fref-1./fcoh)**2) * 360. * u.deg
 
-        if fh.real_data:
+        if fh.telescope == 'aro':
             # order of frequencies is r[0], r[1],i[1],...r[n-1],i[n-1],r[n]
             # for 0 and n need only real part, but for 1...n-1 need real, imag
             # so just get shifts for r[1], r[2], ..., r[n-1]

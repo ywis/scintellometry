@@ -93,12 +93,17 @@ class AROdata(multifile):
         self.fedge = 200. * u.MHz
         self.fedge_at_top = True
         self.samplerate = samplerate
-        # use rfft 
-        self.real_data = True
         # update headers for fun
         self[0].header.update('TBIN', (1./samplerate).to('s').value),
 
-    def nskip(self, date, time0=None):
+    def close(self):
+        for fh in self.fh_raw:
+            fh.Close()
+        for fh in self.fh_links:
+            if os.path.exists(fh):
+                os.unlink(fh)
+
+     def nskip(self, date, time0=None):
         """
         return the number of records needed to skip from start of
         file to iso timestamp 'date'.
@@ -118,6 +123,18 @@ class AROdata(multifile):
                     .to(u.dimensionless_unscaled)))
         return nskip
 
+    def ntimebins(self, t0, t1):
+        """
+        determine the number of timebins between UTC start time 't0'
+        and end time 't1'.
+        """
+        if isinstance(t0, str):
+            t0 = Time(t0, scale='utc')
+        if isinstance(t1, str):
+            t1 = Time(t1, scale='utc')
+        nt = ((t1-t0)*self.fedge/(2*self.setsize)).to(u.dimensionaless_unscaled).value
+        return np.ceil(nsamples_s).astype(int)
+
     def ntint(self, nchan):
         """
         number of samples in a frequency bin
@@ -125,24 +142,7 @@ class AROdata(multifile):
 
         """
         return 2*self.recsize // (2*nchan) 
-    
-    def seek(self, offset):
-        assert offset % self.recsize == 0
-        self.index = offset // self.recsize
-        for i, fh in enumerate(self.fh_raw):
-            fh.Seek(np.count_nonzero(self.sequence['raw'][:self.index] == i) *
-                    self.recsize)
 
-    def close(self):
-        for fh in self.fh_raw:
-            fh.Close()
-        for fh in self.fh_links:
-            if os.path.exists(fh):
-                os.unlink(fh)
- 
-    def record_read(self, count):
-        return fromfile(self, self.dtype, count*self.itemsize)
-        
     def read(self, size):
         assert size == self.recsize
         if self.index == len(self.sequence):
@@ -157,6 +157,16 @@ class AROdata(multifile):
         z = np.zeros(size, dtype='i1')
         self.fh_raw[i].Iread(z)
         return z
+
+    def record_read(self, count):
+        return fromfile(self, self.dtype, count*self.itemsize)
+        
+    def seek(self, offset):
+        assert offset % self.recsize == 0
+        self.index = offset // self.recsize
+        for i, fh in enumerate(self.fh_raw):
+            fh.Seek(np.count_nonzero(self.sequence['raw'][:self.index] == i) *
+                    self.recsize)
 
     def __repr__(self):
         return ("<open multifile raw_voltage_files {} "
@@ -262,12 +272,14 @@ class LOFARdata(multifile):
         self.freqs = freqs
         self.fedge = fbottom
         self.fedge_at_top = False
-        # use fft  (not rfft)
-        self.real_data = False 
 
         # update some of the hdu data
         self['PRIMARY'].header['DATE-OBS'] = self.time0.iso
         self[0].header.update('TBIN', (1./samplerate).to('s').value)
+
+    def close(self):
+        self.fh1.Close()
+        self.fh2.Close()
 
     def nskip(self, date, time0=None):
         """
@@ -288,6 +300,18 @@ class LOFARdata(multifile):
         nskip = int(round( (dt/(self.ntint(self.nchan) / self.fwidth)).to(u.dimensionless_unscaled)))
         return nskip
 
+    def ntimebins(self, t0, t1):
+        """
+        determine the number of timebins between UTC start time 't0'
+        and end time 't1'
+        """
+        if isinstance(t0, str):
+            t0 = Time(t0, scale='utc')
+        if isinstance(t1, str):
+            t1 = Time(t1, scale='utc')
+        nt = ((t1-t0)*self.fwidth/(self.setsize)).to(u.dimensionaless_unscaled).value
+        return np.ceil(nsamples_s).astype(int)
+
     def ntint(self, nchan):
         """
         number of samples in an integration
@@ -296,19 +320,7 @@ class LOFARdata(multifile):
         """
         assert(nchan == self.nchan)
         return self.recsize // (4 * self.nchan)
-   
-    def seek(self, offset):
-        self.fh1.Seek(offset)
-        self.fh2.Seek(offset)
 
-    def record_read(self, count):
-        """
-        read 'count' records of data,
-        returned as a complex number
-        """ 
-        raw = [np.fromstring(r, dtype=self.dtype, count=count).reshape(-1, self.nchan)
-                          for r in self.read(count * self.itemsize)]
-        return raw[0] + 1j*raw[1]
     def read(self, size):
         """
         read 'size' bytes of the LOFAR data
@@ -320,9 +332,18 @@ class LOFARdata(multifile):
         self.fh2.Iread([z2, MPI.BYTE])
         return z1, z2
  
-    def close(self):
-        self.fh1.Close()
-        self.fh2.Close()
+    def record_read(self, count):
+        """
+        read 'count' records of data,
+        returned as a complex number
+        """ 
+        raw = [np.fromstring(r, dtype=self.dtype, count=count).reshape(-1, self.nchan)
+                          for r in self.read(count * self.itemsize)]
+        return raw[0] + 1j*raw[1]
+
+    def seek(self, offset):
+        self.fh1.Seek(offset)
+        self.fh2.Seek(offset)
 
     def __repr__(self):
         return ("<open lofar polarization pair {} and {}>"
@@ -370,7 +391,8 @@ class GMRTdata(multifile):
     def __init__(self, timestamp_file, files, setsize=2**22,
                  utc_offset=TimeDelta(5.5*3600, format='sec'), comm=None):
         super(GMRTdata, self).__init__(hdus=['SUBINT'])
-        self.set_hdu_defaults(_LOFAR_defs)
+        self.set_hdu_defaults(_GMRT_defs)
+
         self.telescope = 'gmrt'
         if comm is None:
             self.comm = MPI.COMM_SELF
@@ -394,17 +416,10 @@ class GMRTdata(multifile):
         self.time0 -= (2.**24/(100*u.MHz/6.)).to(u.s)
         self.dtype = np.int8
         self.itemsize = {np.int8: 2}[self.dtype]
-        self.real_data = False
 
-    def ntint(self, nchan):
-        return self.setsize // (2*nchan)
-
-    def seek(self, offset):
-        assert offset % self.recsize == 0
-        self.index = offset // self.recsize
-        for i, fh in enumerate(self.fh_raw):
-            fh.Seek(np.count_nonzero(self.indices[:self.index] == i) *
-                    self.recsize)
+    def close(self):
+        for fh in self.fh_raw:
+            fh.Close()
 
     def nskip(self, date, time0=None):
         """
@@ -426,10 +441,20 @@ class GMRTdata(multifile):
                     .to(u.dimensionless_unscaled)))
         return nskip
 
+    def ntimebins(self, t0, t1):
+        """
+        determine the number of timebins between UTC start time 't0'
+        and end time 't1'
+        """
+        if isinstance(t0, str):
+            t0 = Time(t0, scale='utc')
+        if isinstance(t1, str):
+            t1 = Time(t1, scale='utc')
+        nt = ((t1-t0)*self.samplerate/(2*self.setsize)).to(u.dimensionaless_unscaled).value
+        return np.ceil(nsamples_s).astype(int)
 
-    def close(self):
-        for fh in self.fh_raw:
-            fh.Close()
+    def ntint(self, nchan):
+        return self.setsize // (2*nchan)
 
     def record_read(self, count):
         return fromfile(self, self.dtype, count*self.itemsize)
@@ -446,6 +471,13 @@ class GMRTdata(multifile):
         self.fh_raw[self.indices[self.index-1]].Iread(z)
         return z
 
+    def seek(self, offset):
+        assert offset % self.recsize == 0
+        self.index = offset // self.recsize
+        for i, fh in enumerate(self.fh_raw):
+            fh.Seek(np.count_nonzero(self.indices[:self.index] == i) *
+                    self.recsize)
+
     @property
     def time(self):
         return self.timestamps[self.index]
@@ -456,7 +488,36 @@ class GMRTdata(multifile):
                 .format(self.fh_raw, self.timestamp_file, self.index,
                         self.timestamps[self.index]))
 
-
+# GMRT defaults for psrfits HDUs
+# Note: these are largely made-up at this point
+_GMRT_defs = {}
+_GMRT_defs['PRIMARY'] = {'TELESCOP':'GMRT',
+                        'IBEAM':1, 'FD_POLN':'LIN',
+                        'OBS_MODE':'PSR',
+                        'ANT_X':0, 'ANT_Y':0, 'ANT_Z':0, 'NRCVR':1,
+                        'FD_HAND':1, 'FD_SANG':0, 'FD_XYPH':0,
+                        'BE_PHASE':0, 'BE_DCC':0, 'BE_DELAY':0,
+                        'TCYCLE':0, 'OBSFREQ':300, 'OBSBW':100,
+                        'OBSNCHAN':20, 'CHAN_DM':0,
+                        'EQUINOX':2000.0, 'BMAJ':1, 'BMIN':1, 'BPA':0,
+                        'SCANLEN':1, 'FA_REQ':0,
+                        'CAL_FREQ':0, 'CAL_DCYC':0, 'CAL_PHS':0, 'CAL_NPHS':0,
+                        'STT_IMJD':54000, 'STT_SMJD':0, 'STT_OFFS':0}
+samplerate = 100. * u.MHz / 3.
+_GMRT_defs['SUBINT']  = {'INT_TYPE': 'TIME',
+                        'SCALE': 'FluxDen',
+                        'POL_TYPE': 'AABB',
+                        'NPOL':2,
+                        'TBIN':(1./samplerate).to('s').value,
+                        'NBIN':1, 'NBIN_PRD':1,
+                        'PHS_OFFS':0,
+                        'NBITS':1,
+                        'ZERO_OFF':0, 'SIGNINT':0,
+                        'NSUBOFFS':0,
+                        'NCHAN':1,
+                        'CHAN_BW':1,
+                        'DM':0, 'RM':0, 'NCHNOFFS':0,
+                        'NSBLK':1}
 
 def read_timestamp_file(filename, utc_offset):
     pc_times = []
