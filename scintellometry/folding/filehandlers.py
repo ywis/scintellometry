@@ -103,7 +103,7 @@ class AROdata(multifile):
             if os.path.exists(fh):
                 os.unlink(fh)
 
-     def nskip(self, date, time0=None):
+    def nskip(self, date, time0=None):
         """
         return the number of records needed to skip from start of
         file to iso timestamp 'date'.
