@@ -168,9 +168,9 @@ def CL_parser():
                         help="The date of the data to reduce"
                         "Recall observations.conf stores the observations"
                         "runs keyed by telescope and date.")
-    d_parser.add_argument('-t0', '--starttime', type=str, default='2013-07-25T22:15:00',
+    d_parser.add_argument('-t0', '--starttime', type=str, default='2013-07-25T22:25:04.767',
                           help="Timestamp within the observation run to start processing.")
-    d_parser.add_argument('-t1', '--endtime', type=str, default='2013-07-25T22:20:00',
+    d_parser.add_argument('-t1', '--endtime', type=str, default='2013-07-25T22:25:19.767',
                           help="Timestamp within the observation run to end processing. "
                           "(replaces the 'nt' argument)")
     
