@@ -8,10 +8,14 @@ class twofile(object):
     def __init__(self, timestamp_file, files, recsize=2**22,
                  utc_offset=TimeDelta(5.5*3600, format='sec'),
                  comm=None):
+        if comm is None:
+            self.comm = MPI.COMM_SELF
+        else:
+            self.comm = comm
         self.timestamp_file = timestamp_file
         self.indices, self.timestamps, self.gsb_start = read_timestamp_file(
             timestamp_file, utc_offset)
-        self.fh_raw = [MPI.File.Open(comm, raw) for raw in files]
+        self.fh_raw = [MPI.File.Open(self.comm, raw, amode=MPI.MODE_RDONLY) for raw in files]
         self.recsize = recsize
         self.index = 0
 
@@ -35,7 +39,7 @@ class twofile(object):
         #     self.fh_raw[self.indices[self.index-1]],
         #     self.timestamps[self.index-1]))
         z = np.zeros(size, dtype='i1')
-        self.fh_raw[self.indices[self.index-1]].Iread(size)
+        self.fh_raw[self.indices[self.index-1]].Iread(z)
         return z
 
     @property

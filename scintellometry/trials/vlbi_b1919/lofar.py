@@ -9,6 +9,19 @@ from scintellometry.folding.pmap import pmap
 
 from mpi4py import MPI
 
+def normalize_counts(q, count=None):
+    """ normalize routines for waterfall and foldspec data """
+    if count is None:
+        nonzero = np.isclose(q, np.zeros_like(q)) # == 0.
+        qn = q
+    else:
+        nonzero = count > 0
+        qn = np.where(nonzero, q/count, 0.)
+    qn -= np.where(nonzero,
+                   np.sum(qn, 1, keepdims=True) /
+                   np.sum(nonzero, 1, keepdims=True), 0.)
+    return qn
+ 
 if __name__ == '__main__':
     comm = MPI.COMM_WORLD
     # pulsar parameters
@@ -125,7 +138,7 @@ if __name__ == '__main__':
                               ngate, ntbin, ntw, dm, fref, phasepol,
                               coherent=coherent, do_waterfall=do_waterfall,
                               do_foldspec=do_foldspec,
-                              verbose=verbose, progress_interval=1, comm=com)
+                              verbose=verbose, progress_interval=1, comm=comm)
 
         if do_foldspec:
             foldspec = np.zeros_like(myf)
@@ -142,7 +155,7 @@ if __name__ == '__main__':
                 np.save("lofar{0}foldspec2{1}_{2}{3}.npy".format(psr, P, *S), this_f2)
 
         if do_waterfall:
-            wf = np.zeros_like(mywf
+            wf = np.zeros_like(mywf)
             comm.Reduce(mywf, wf, op=MPI.SUM, root=0)
             if comm.rank == 0:
                 waterfalls.append(wf)
@@ -154,9 +167,12 @@ if __name__ == '__main__':
 
     if do_foldspec and comm.rank == 0:
         foldspec2 = np.concatenate(foldspecs, axis=0)
+        icounts2 = np.concatenate(icounts, axis=0)
+        this_foldspec2 = normalize_counts(foldspec2, icounts2)
         np.save("lofar{0}foldspec2_{1}{2}.npy".format(psr, *S), foldspec2)
+        np.save("lofar{0}icounts2_{1}{2}.npy".format(psr, *S), icounts2)
 
-        f2 = foldspec2.copy()
+        f2 = this_foldspec2.copy()
         foldspec1 = f2.sum(axis=2)
         fluxes = foldspec1.sum(axis=0)
         foldspec3 = f2.sum(axis=0)
@@ -179,18 +195,3 @@ if __name__ == '__main__':
                  f2.transpose(0,2,1).reshape(nchan,-1), 1, verbose)
             pmap('lofar{0}folded3_{1}{2}.pgm'.format(psr, *S),
                  foldspec3, 0, verbose)
-
-def normalize_counts(q, count=None):
-    """ normalize routines for waterfall and foldspec data """
-    if count is None:
-        nonzero = np.isclose(q, np.zeros_like(q)) # == 0.
-        qn = q
-    else:
-        nonzero = count > 0
-        qn = np.where(nonzero, q/count, 0.)
-    qn -= np.where(nonzero,
-                   np.sum(qn, 1, keepdims=True) /
-                   np.sum(nonzero, 1, keepdims=True), 0.)
-    return qn
-
-

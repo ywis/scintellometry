@@ -25,6 +25,7 @@ def rfi_filter_power(power):
 
 
 if __name__ == '__main__':
+    comm = MPI.COMM_WORLD
     # pulsar parameters
     psr = 'B1919+21'
     # psr = 'B2016+28'
@@ -115,7 +116,7 @@ if __name__ == '__main__':
     do_foldspec = True
     dedisperse = 'incoherent'
 
-    with multifile(seq_file, raw_files) as fh1:
+    with multifile(seq_file, raw_files, comm=comm) as fh1:
 
         if not isinstance(phasepol, Polynomial):
             from astropy.utils.data import get_pkg_data_filename
@@ -143,7 +144,7 @@ if __name__ == '__main__':
             dedisperse=dedisperse, do_waterfall=do_waterfall,
             do_foldspec=do_foldspec, verbose=verbose, progress_interval=1,
             rfi_filter_raw=rfi_filter_raw,
-            rfi_filter_power=None)  # rfi_filter_power)
+            rfi_filter_power=None, comm=comm)  # rfi_filter_power)
 
     if do_waterfall:
         waterfall = np.zeros_like(mywaterfall)
@@ -158,7 +159,7 @@ if __name__ == '__main__':
 
     if do_foldspec:
         foldspec = np.zeros_like(myfoldspec)
-        icount = np.zeros_like(icount)
+        icount = np.zeros_like(myicount)
         comm.Reduce(myfoldspec, foldspec, op=MPI.SUM, root=0)
         comm.Reduce(myicount, icount, op=MPI.SUM, root=0)
         if comm.rank == 0:

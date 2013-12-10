@@ -1,16 +1,17 @@
 from __future__ import division
 
 import numpy as np
+import os
 from astropy.table import Table
 
 from mpi4py import MPI
 
 class multifile(object):
-    def __init__(self, sequence_file, raw_voltage_files, recsize=2**25
+    def __init__(self, sequence_file, raw_voltage_files, recsize=2**25,
                  comm=None):
         if comm is None:
             self.comm = MPI.COMM_SELF
-       else:
+        else:
             self.comm = comm
         self.sequence_file = sequence_file
         self.sequence = Table(np.loadtxt(sequence_file, np.int32),

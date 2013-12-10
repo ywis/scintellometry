@@ -25,7 +25,7 @@ def fold(fh1, dtype, samplerate, fedge, fedge_at_top, nchan,
          nt, ntint, nskip, ngate, ntbin, ntw, dm, fref, phasepol,
          dedisperse='incoherent',
          do_waterfall=True, do_foldspec=True, verbose=True,
-         progress_interval=100, rfi_filter_raw=None, rfi_filter_power=None
+         progress_interval=100, rfi_filter_raw=None, rfi_filter_power=None,
          comm=None):
     """FFT ARO data, fold by phase/time and make a waterfall series
 
@@ -147,7 +147,7 @@ def fold(fh1, dtype, samplerate, fedge, fedge_at_top, nchan,
             # data just a series of bytes, each containing one 8 bit or
             # two 4-bit samples (set by dtype in caller)
             if size > 1:
-                fh1.seek((j+nksip)*recsize)
+                fh1.seek((j+nskip)*recsize)
             raw = fromfile(fh1, dtype, recsize)
         except(EOFError, IOError) as exc:
             print("Hit {}; writing pgm's".format(exc))
