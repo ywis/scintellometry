@@ -23,6 +23,18 @@ def rfi_filter_raw(raw):
 def rfi_filter_power(power):
     return np.clip(power, 0., MAX_RMS**2 * power.shape[-1])
 
+def normalize_counts(q, count=None):
+    """ normalize routines for waterfall and foldspec data """
+    if count is None:
+        nonzero = np.isclose(q, np.zeros_like(q)) # == 0.
+        qn = q
+    else:
+        nonzero = count > 0
+        qn = np.where(nonzero, q/count, 0.)
+    qn -= np.where(nonzero,
+                   np.sum(qn, 1, keepdims=True) /
+                   np.sum(nonzero, 1, keepdims=True), 0.)
+    return qn
 
 if __name__ == '__main__':
     comm = MPI.COMM_WORLD
@@ -151,10 +163,7 @@ if __name__ == '__main__':
         comm.Reduce(mywaterfall, waterfall, op=MPI.SUM, root=0)
 
         if comm.rank == 0:
-            nonzero = waterfall == 0.
-            waterfall -= np.where(nonzero,
-                                  np.sum(waterfall, 1, keepdims=True) /
-                                  np.sum(nonzero, 1, keepdims=True), 0.)
+            waterfall = normalize_counts(waterfall)
         np.save("aro{0}waterfall_{1}.npy".format(psr, node), waterfall)
 
     if do_foldspec:
@@ -166,12 +175,7 @@ if __name__ == '__main__':
             np.save("aro{0}foldspec_{1}".format(psr, node), foldspec)
             np.save("aro{0}icount_{1}".format(psr, node), icount)
             # get normalised flux in each bin (where any were added)
-            nonzero = icount > 0
-            f2 = np.where(nonzero, foldspec/icount, 0.)
-            # subtract phase average and store
-            f2 -= np.where(nonzero,
-                           np.sum(f2, 1, keepdims=True) /
-                           np.sum(nonzero, 1, keepdims=True), 0)
+            f2 = normalize_counts(foldspec, icount)
             foldspec1 = f2.sum(axis=2)
             fluxes = foldspec1.sum(axis=0)
             foldspec3 = f2.sum(axis=0)
