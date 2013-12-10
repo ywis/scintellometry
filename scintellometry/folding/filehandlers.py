@@ -132,8 +132,8 @@ class AROdata(multifile):
             t0 = Time(t0, scale='utc')
         if isinstance(t1, str):
             t1 = Time(t1, scale='utc')
-        nt = ((t1-t0)*self.fedge/(2*self.setsize)).to(u.dimensionaless_unscaled).value
-        return np.ceil(nsamples_s).astype(int)
+        nt = ((t1-t0)*self.fedge/(2*self.setsize)).to(u.dimensionless_unscaled).value
+        return np.ceil(nt).astype(int)
 
     def ntint(self, nchan):
         """
@@ -309,8 +309,8 @@ class LOFARdata(multifile):
             t0 = Time(t0, scale='utc')
         if isinstance(t1, str):
             t1 = Time(t1, scale='utc')
-        nt = ((t1-t0)*self.fwidth/(self.setsize)).to(u.dimensionaless_unscaled).value
-        return np.ceil(nsamples_s).astype(int)
+        nt = ((t1-t0)*self.fwidth/(self.setsize)).to(u.dimensionless_unscaled).value
+        return np.ceil(nt).astype(int)
 
     def ntint(self, nchan):
         """
@@ -450,8 +450,8 @@ class GMRTdata(multifile):
             t0 = Time(t0, scale='utc')
         if isinstance(t1, str):
             t1 = Time(t1, scale='utc')
-        nt = ((t1-t0)*self.samplerate/(2*self.setsize)).to(u.dimensionaless_unscaled).value
-        return np.ceil(nsamples_s).astype(int)
+        nt = ((t1-t0)*self.samplerate/(2*self.setsize)).to(u.dimensionless_unscaled).value
+        return np.ceil(nt).astype(int)
 
     def ntint(self, nchan):
         return self.setsize // (2*nchan)

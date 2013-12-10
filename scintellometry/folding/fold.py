@@ -197,7 +197,6 @@ def fold(fh, comm, dtype, samplerate, fedge, fedge_at_top, nchan,
 
             # ARO/GMRT return int-stream, LOFAR returns complex64 (count/nchan, nchan)
             raw = fh.record_read(count)
-            print("READ",j, fh.index, fh.fh_raw[fh.sequence['raw'][fh.index]].Get_position(), rank, size)
 
         except(EOFError, IOError) as exc:
             print("Hit {}; writing pgm's".format(exc))

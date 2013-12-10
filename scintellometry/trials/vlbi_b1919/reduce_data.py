@@ -159,9 +159,9 @@ def CL_parser():
                              "A convenience flag to set the default parameters as "
                              "configured in aro.py, lofar.py, gmrt.py")
 
-    d_parser = parser.add_argument_group("Data-related parameters. They specify "
+    d_parser = parser.add_argument_group("Data-related parameters \nThey specify "
                    "which observation run to process (consistent with [telescope], [[date]] entries "
-                   "in observations.conf), at the start and finish timestamps.")
+                   "\nin observations.conf), at the start and finish timestamps.")
     d_parser.add_argument('-t','--telescope', type=str, default='aro',
                         help="The data to reduce. One of ['aro', 'lofar', 'gmrt']." ) 
     d_parser.add_argument('-d','--date', type=str, default='2013-07-25T18:14:20',
@@ -187,7 +187,7 @@ def CL_parser():
     f_parser.add_argument('-nb', '--ntbin', type=int, default=12,
                           help="number of time bins the time series is split into for folding. ")
 
-    w_parser = parser.add_argument_group("Waterfall related parameters.")
+    w_parser = parser.add_argument_group("Waterfall related parameters")
     w_parser.add_argument('-w','--waterfall', type=bool, default=True,
                         help="Produce a waterfall plot")
     w_parser.add_argument('-nwm', '--ntw_min', type=int, default=10200,
