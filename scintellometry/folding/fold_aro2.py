@@ -138,7 +138,6 @@ def fold(fh1, dtype, samplerate, fedge, fedge_at_top, nchan,
             # data just a series of bytes, each containing one 8 bit or
             # two 4-bit samples (set by dtype in caller)
             raw = fromfile(fh1, dtype, recsize)
-            print("READ",j, fh1.index, fh1.fh_raw[fh1.sequence['raw'][fh1.index]].tell())
         except(EOFError, IOError) as exc:
             print("Hit {}; writing pgm's".format(exc))
             break
