@@ -7,15 +7,17 @@ import numpy as np
 from scipy.fftpack import fft, ifft, fftfreq
 import astropy.units as u
 
+from scintellometry.folding.mpilofile import mpilofile
+from mpi4py import MPI
+
 from fromfile import fromfile
 
 dispersion_delay_constant = 4149. * u.s * u.MHz**2 * u.cm**3 / u.pc
 
-
 def fold(file1, file2, dtype, fbottom, fwidth, nchan,
          nt, ntint, nskip, ngate, ntbin, ntw, dm, fref, phasepol,
          coherent=False, do_waterfall=True, do_foldspec=True, verbose=True,
-         progress_interval=100):
+         progress_interval=100, comm=None):
     """Fold pre-channelized LOFAR data, possibly dedispersing it
 
     Parameters
@@ -57,13 +59,21 @@ def fold(file1, file2, dtype, fbottom, fwidth, nchan,
         whether to give some progress information (default: True)
     progress_interval : int
         Ping every progress_interval sets
+    comm : MPI communicator (default: None
     """
-
+    if comm is not None:
+        rank = comm.rank
+        size = comm.size
+    else:
+        rank = 0
+        size = 1
     # initialize folded spectrum and waterfall
     if do_foldspec:
-        foldspec2 = np.zeros((nchan, ngate, ntbin))
+        foldspec = np.zeros((nchan, ngate, ntbin))
+        icount = np.zeros((nchan, ngate, ntbin))
     else:
-        foldspec2 = None
+        foldspec = None
+        icount = None
     if do_waterfall:
         nwsize = nt*ntint//ntw
         waterfall = np.zeros((nchan, nwsize))
@@ -73,20 +83,19 @@ def fold(file1, file2, dtype, fbottom, fwidth, nchan,
     # # of items to read from file.
     itemsize = np.dtype(dtype).itemsize
     count = nchan*ntint
-    if verbose:
+    if verbose and rank == 0:
         print('Reading from {}\n         and {}'.format(file1, file2))
 
-    with open(file1, 'rb', count*itemsize) as fh1, \
-         open(file2, 'rb', count*itemsize) as fh2:
-
+    with mpilofile(comm, file1) as fh1, \
+         mpilofile(comm, file2) as fh2:
         if nskip > 0:
-            if verbose:
+            if verbose and rank == 0:
                 print('Skipping {0} bytes'.format(nskip))
-            fh1.seek(nskip * ntint * nchan * itemsize)
-            fh2.seek(nskip * ntint * nchan * itemsize)
+            # if # MPI processes > 1 we seek in for-loop 
+            if size == 1:
+                fh1.seek(nskip * count * itemsize)
+                fh2.seek(nskip * count * itemsize)
 
-        foldspec = np.zeros((nchan, ngate))
-        icount = np.zeros((nchan, ngate))
 
         dtsample = (1./fwidth).to(u.s)
         tstart = dtsample * nskip * ntint
@@ -108,7 +117,7 @@ def fold(file1, file2, dtype, fbottom, fwidth, nchan,
             dedisperse = np.exp(dang.to(u.rad).value * 1j
                                 ).conj().astype(np.complex64)
 
-        for j in xrange(nt):
+        for j in xrange(rank, nt, size):
             if verbose and j % progress_interval == 0:
                 print('Doing {:6d}/{:6d}; time={:18.12f}'.format(
                     j+1, nt, (tstart+dtsample*j*ntint).value))
@@ -119,6 +128,9 @@ def fold(file1, file2, dtype, fbottom, fwidth, nchan,
             try:
                 # data stored as series of floats in two files,
                 # one for real and one for imaginary
+                if size > 1:
+                    fh1.seek( (nskip + j)*count*itemsize)
+                    fh2.seek( (nskip + j)*count*itemsize)
                 raw1 = fromfile(fh1, dtype, count).reshape(-1,nchan)
                 raw2 = fromfile(fh2, dtype, count).reshape(-1,nchan)
             except(EOFError):
@@ -157,29 +169,17 @@ def fold(file1, file2, dtype, fbottom, fwidth, nchan,
 
             if do_foldspec:
                 tsample = (tstart + isr*dtsample).value  # times since start
-
+                ibin = j*ntbin//nt
                 for k in xrange(nchan):
                     t = tsample - dt[k]  # dedispersed times
                     phase = phasepol(t)  # corresponding PSR phases
                     iphase = np.remainder(phase*ngate,
                                           ngate).astype(np.int)
                     # sum and count samples by phase bin
-                    foldspec[k] += np.bincount(iphase, power[:,k], ngate)
-                    icount[k] += np.bincount(iphase, None, ngate)
+                    foldspec[k,:,ibin] += np.bincount(iphase, power[:,k], ngate)
+                    icount[k,:,ibin] += np.bincount(iphase, None, ngate)
 
-                ibin = j*ntbin//nt  # bin in the time series: 0..ntbin-1
-                if (j+1)*ntbin//nt > ibin:  # last addition to bin?
-                    # get normalised flux in each bin (where any were added)
-                    nonzero = icount > 0
-                    nfoldspec = np.where(nonzero, foldspec/icount, 0.)
-                    # subtract phase average and store
-                    nfoldspec -= np.where(nonzero,
-                                          np.sum(nfoldspec, 1, keepdims=True) /
-                                          np.sum(nonzero, 1, keepdims=True), 0)
-                    foldspec2[:,:,ibin] = nfoldspec
-                    # reset for next iteration
-                    foldspec *= 0
-                    icount *= 0
+
 
     if verbose:
         print('read {0:6d} out of {1:6d}'.format(j+1, nt))
@@ -190,4 +190,4 @@ def fold(file1, file2, dtype, fbottom, fwidth, nchan,
                               np.sum(waterfall, 1, keepdims=True) /
                               np.sum(nonzero, 1, keepdims=True), 0.)
 
-    return foldspec2, waterfall
+    return foldspec, icount, waterfall

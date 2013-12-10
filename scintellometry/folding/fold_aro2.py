@@ -2,13 +2,12 @@
 from __future__ import division, print_function
 
 import numpy as np
+import os
 try:
     import pyfftw
     pyfftw.interfaces.cache.enable()
     from pyfftw.interfaces.scipy_fftpack import rfft, rfftfreq, irfft
-    import multiprocessing
-    _NTHREADS = min(4, multiprocessing.cpu_count())
-    _fftargs = {'threads': _NTHREADS,
+    _fftargs = {'threads': os.environ.get('OMP_NUM_THREADS', 2),
                 'planner_effort': 'FFTW_ESTIMATE'}
 except(ImportError):
     print("Consider installing pyfftw: https://github.com/hgomersall/pyFFTW")
@@ -26,7 +25,8 @@ def fold(fh1, dtype, samplerate, fedge, fedge_at_top, nchan,
          nt, ntint, nskip, ngate, ntbin, ntw, dm, fref, phasepol,
          dedisperse='incoherent',
          do_waterfall=True, do_foldspec=True, verbose=True,
-         progress_interval=100, rfi_filter_raw=None, rfi_filter_power=None):
+         progress_interval=100, rfi_filter_raw=None, rfi_filter_power=None,
+         comm=None):
     """FFT ARO data, fold by phase/time and make a waterfall series
 
     Parameters
@@ -72,8 +72,14 @@ def fold(fh1, dtype, samplerate, fedge, fedge_at_top, nchan,
         whether to give some progress information (default: True)
     progress_interval : int
         Ping every progress_interval sets
+    comm : MPI communicator (default None)
     """
-
+    if comm is None:
+        rank = 0
+        size = 1
+    else:
+        rank = comm.rank
+        size = comm.size
     # initialize folded spectrum and waterfall
     foldspec = np.zeros((nchan, ngate, ntbin))
     icount = np.zeros((nchan, ngate, ntbin), dtype=np.int64)
@@ -90,7 +96,10 @@ def fold(fh1, dtype, samplerate, fedge, fedge_at_top, nchan,
         if verbose:
             print('Skipping {0} records = {1} bytes'
                   .format(nskip, nskip*recsize))
-        fh1.seek(nskip * recsize)
+        # If MPI threading, the threads hop over one-another
+        # and seeking is done in for-loop.
+        if size == 1:
+            fh1.seek(nskip * recsize)
 
     dt1 = (1./samplerate).to(u.s)
     # need 2*nchan real-valued samples for each FFT
@@ -127,7 +136,7 @@ def fold(fh1, dtype, samplerate, fedge, fedge_at_top, nchan,
         dang = dang.to(u.rad).value[1:-1:2]
         dd_coh = np.exp(dang * 1j).conj().astype(np.complex64)
 
-    for j in xrange(nt):
+    for j in xrange(rank, nt, size):
         if verbose and j % progress_interval == 0:
             print('Doing {:6d}/{:6d}; time={:18.12f}'.format(
                 j+1, nt, (tstart+dtsample*j*ntint).value))  # time since start
@@ -137,6 +146,8 @@ def fold(fh1, dtype, samplerate, fedge, fedge_at_top, nchan,
         try:
             # data just a series of bytes, each containing one 8 bit or
             # two 4-bit samples (set by dtype in caller)
+            if size > 1:
+                fh1.seek((j+nskip)*recsize)
             raw = fromfile(fh1, dtype, recsize)
         except(EOFError, IOError) as exc:
             print("Hit {}; writing pgm's".format(exc))

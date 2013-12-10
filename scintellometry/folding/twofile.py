@@ -2,14 +2,20 @@ import numpy as np
 
 from astropy.time import Time, TimeDelta
 
+from mpi4py import MPI
 
 class twofile(object):
     def __init__(self, timestamp_file, files, recsize=2**22,
-                 utc_offset=TimeDelta(5.5*3600, format='sec')):
+                 utc_offset=TimeDelta(5.5*3600, format='sec'),
+                 comm=None):
+        if comm is None:
+            self.comm = MPI.COMM_SELF
+        else:
+            self.comm = comm
         self.timestamp_file = timestamp_file
         self.indices, self.timestamps, self.gsb_start = read_timestamp_file(
             timestamp_file, utc_offset)
-        self.fh_raw = [open(raw, 'rb') for raw in files]
+        self.fh_raw = [MPI.File.Open(self.comm, raw, amode=MPI.MODE_RDONLY) for raw in files]
         self.recsize = recsize
         self.index = 0
 
@@ -17,12 +23,12 @@ class twofile(object):
         assert offset % self.recsize == 0
         self.index = offset // self.recsize
         for i, fh in enumerate(self.fh_raw):
-            fh.seek(np.count_nonzero(self.indices[:self.index] == i) *
+            fh.Seek(np.count_nonzero(self.indices[:self.index] == i) *
                     self.recsize)
 
     def close(self):
         for fh in self.fh_raw:
-            fh.close()
+            fh.Close()
 
     def read(self, size):
         assert size == self.recsize
@@ -32,7 +38,9 @@ class twofile(object):
         # print('reading from {}, t={}'.format(
         #     self.fh_raw[self.indices[self.index-1]],
         #     self.timestamps[self.index-1]))
-        return self.fh_raw[self.indices[self.index-1]].read(size)
+        z = np.zeros(size, dtype='i1')
+        self.fh_raw[self.indices[self.index-1]].Iread(z)
+        return z
 
     @property
     def time(self):

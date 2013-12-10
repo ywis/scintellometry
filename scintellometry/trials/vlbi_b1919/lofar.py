@@ -7,7 +7,23 @@ import astropy.units as u
 from scintellometry.folding.fold_lofar import fold
 from scintellometry.folding.pmap import pmap
 
+from mpi4py import MPI
+
+def normalize_counts(q, count=None):
+    """ normalize routines for waterfall and foldspec data """
+    if count is None:
+        nonzero = np.isclose(q, np.zeros_like(q)) # == 0.
+        qn = q
+    else:
+        nonzero = count > 0
+        qn = np.where(nonzero, q/count, 0.)
+    qn -= np.where(nonzero,
+                   np.sum(qn, 1, keepdims=True) /
+                   np.sum(nonzero, 1, keepdims=True), 0.)
+    return qn
+ 
 if __name__ == '__main__':
+    comm = MPI.COMM_WORLD
     # pulsar parameters
     psr = 'B1919+21'
     # psr = 'B2016+28'
@@ -71,6 +87,7 @@ if __name__ == '__main__':
     do_foldspec = True
 
     foldspecs = []
+    icounts = []
     waterfalls = []
     S = [0,1]
 
@@ -115,28 +132,47 @@ if __name__ == '__main__':
         if verbose:
             print("Doing P={:03d}, fbottom={}".format(P, fbottom))
 
-        f2, wf = fold(file1, file2, '>f4',
-                      fbottom, fwidth, nchan,
-                      nt, ntint, nskip,
-                      ngate, ntbin, ntw, dm, fref, phasepol,
-                      coherent=coherent, do_waterfall=do_waterfall,
-                      do_foldspec=do_foldspec,
-                      verbose=verbose, progress_interval=1)
+        myf, myi, mywf = fold(file1, file2, '>f4',
+                              fbottom, fwidth, nchan,
+                              nt, ntint, nskip,
+                              ngate, ntbin, ntw, dm, fref, phasepol,
+                              coherent=coherent, do_waterfall=do_waterfall,
+                              do_foldspec=do_foldspec,
+                              verbose=verbose, progress_interval=1, comm=comm)
 
-        foldspecs.append(f2)
-        waterfalls.append(wf)
         if do_foldspec:
-            np.save("lofar{0}foldspec2{1}_{2}{3}.npy".format(psr, P, *S), f2)
+            foldspec = np.zeros_like(myf)
+            comm.Reduce(myf, foldspec, op=MPI.SUM, root=0)
+            icount = np.zeros_like(myi)
+            comm.Reduce(myi, icount, op=MPI.SUM, root=0)
 
-    if do_waterfall:
+            # save this spectrum
+            if comm.rank == 0:
+                foldspecs.append(foldspec)
+                icounts.append(icount)
+                this_f2 = normalize_counts(foldspec, icount)
+
+                np.save("lofar{0}foldspec2{1}_{2}{3}.npy".format(psr, P, *S), this_f2)
+
+        if do_waterfall:
+            wf = np.zeros_like(mywf)
+            comm.Reduce(mywf, wf, op=MPI.SUM, root=0)
+            if comm.rank == 0:
+                waterfalls.append(wf)
+
+    if do_waterfall and comm.rank == 0:
         waterfall = np.concatenate(waterfalls, axis=0)
+        waterfall = normalize_counts(waterfall)
         np.save("lofar{0}waterfall_{1}{2}.npy".format(psr, *S), waterfall)
 
-    if do_foldspec:
+    if do_foldspec and comm.rank == 0:
         foldspec2 = np.concatenate(foldspecs, axis=0)
+        icounts2 = np.concatenate(icounts, axis=0)
+        this_foldspec2 = normalize_counts(foldspec2, icounts2)
         np.save("lofar{0}foldspec2_{1}{2}.npy".format(psr, *S), foldspec2)
+        np.save("lofar{0}icounts2_{1}{2}.npy".format(psr, *S), icounts2)
 
-        f2 = foldspec2.copy()
+        f2 = this_foldspec2.copy()
         foldspec1 = f2.sum(axis=2)
         fluxes = foldspec1.sum(axis=0)
         foldspec3 = f2.sum(axis=0)
@@ -147,7 +183,7 @@ if __name__ == '__main__':
         f.close()
 
     plots = True
-    if plots:
+    if plots and comm.rank == 0:
         if do_waterfall:
             w = waterfall.copy()
             pmap('lofar{0}waterfall_{1}{2}.pgm'.format(psr, *S),
