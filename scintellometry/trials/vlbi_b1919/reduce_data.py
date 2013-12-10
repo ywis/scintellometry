@@ -27,10 +27,10 @@ def rfi_filter_raw(raw):
 
 def rfi_filter_power(power):
     return np.clip(power, 0., MAX_RMS**2 * power.shape[-1])
+       
 
-
-def reduce(telescope, obsdate, tstart, tend, nchan, ngate, nt, ntbin, ntw_min=10200, fref=_fref,
-           rfi_filter_raw=rfi_filter_raw,
+def reduce(telescope, obsdate, tstart, tend, nchan, ngate, ntbin, ntw_min=10200, fref=_fref,
+           rfi_filter_raw=None,
            do_waterfall=True, do_foldspec=True, dedisperse=None,verbose=True):
     comm = MPI.COMM_WORLD
     Obs = obsdata()
@@ -240,7 +240,7 @@ if __name__ == '__main__':
         args.dedisperse = 'incoherent'
 
     reduce(
-        args.telescope, args.date, tstart=args.t0, tend=args.t1,
+        args.telescope, args.date, tstart=args.starttime, tend=args.endtime,
         nchan=args.nchan, ngate=args.ngate, ntbin=args.ntbin, ntw_min=args.ntw_min,
         rfi_filter_raw=args.rfi_filter_raw,
         do_waterfall=args.waterfall, do_foldspec=args.foldspec,
