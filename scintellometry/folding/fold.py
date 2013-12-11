@@ -5,6 +5,7 @@ from inspect import getargspec
 import numpy as np
 import os
 import astropy.units as u
+impor astropy.io.fits as FITS
 
 try:
     import pyfftw
@@ -26,7 +27,8 @@ def fold(fh, comm, dtype, samplerate, fedge, fedge_at_top, nchan,
          nt, ntint, nskip, ngate, ntbin, ntw, dm, fref, phasepol,
          dedisperse='incoherent',
          do_waterfall=True, do_foldspec=True, verbose=True,
-         progress_interval=100, rfi_filter_raw=None, rfi_filter_power=None):
+         progress_interval=100, rfi_filter_raw=None, rfi_filter_power=None,
+         return_fits=True):
     """
     FFT data, fold by phase/time and make a waterfall series
     
@@ -74,6 +76,8 @@ def fold(fh, comm, dtype, samplerate, fedge, fedge_at_top, nchan,
         whether to give some progress information (default: True)
     progress_interval : int
         Ping every progress_interval sets
+    return_fits : bool (default: True)
+        return a subint fits table for rank == 0 (None otherwise)
         
     """
     if comm is None:
@@ -283,17 +287,79 @@ def fold(fh, comm, dtype, samplerate, fedge, fedge_at_top, nchan,
     if verbose:
         print('read {0:6d} out of {1:6d}'.format(j+1, nt))
 
-    # update the 'subint' header
-    fh['SUBINT'].header.update('NPOL', 1)
-    fh['SUBINT'].header.update('NBIN', 1)
-    fh['SUBINT'].header.update('NBIN_PRD', ngate)
-    fh['SUBINT'].header.update('NCHAN', nchan)
-    # AAR: entered random chan_bw... TODO
-    fh['SUBINT'].header.update('CHAN_BW', 0.197)
-    if dedisperse in ['coherent', 'by-channel', 'incoherent']:
-        fh['SUBINT'].header.update('DM', dm)
+    if return_fits and rank == 0:
+        # update the 'subint' header and create a new one to be returned
+        # owing to the structure of the code (MPI), we need to assign
+        # the 'DATA' outside of fold.py   
+        fh['SUBINT'].header.update('NPOL', 1)
+        fh['SUBINT'].header.update('NBIN', 1)
+        fh['SUBINT'].header.update('NBIN_PRD', ngate)
+        fh['SUBINT'].header.update('NCHAN', nchan)
+        # AAR: entered random chan_bw... TODO
+        fh['SUBINT'].header.update('CHAN_BW', 0.197)
+        if dedisperse in ['coherent', 'by-channel', 'incoherent']:
+            fh['SUBINT'].header.update('DM', dm.value)
 
-    return foldspec, icount, waterfall
+        # subint data
+
+        # update table columns
+        # TODO: allow multiple polarizations
+        npol = 1
+        newcols = []
+        for col in fh['subint'].columns:
+            attrs = col.__dict__
+            # remove non-init args
+            for nn in ['_pseudo_unsigned_ints', '_dims', '_physical_values','dtype', '_phantom']:
+                attrs.pop(nn, None)
+
+            if col.name == 'TSUBINT':
+                attrs['array'] = tsubint
+            elif col.name == 'OFFS_SUB':
+                attrs['array'] = np.arange(ntbin) * tsubint 
+            elif col.name == 'DAT_FREQ':
+                #attrs['array'] = (freq.reshape(-1, freq.size)).repeat(ntbin, axis=0)
+                attrs['array'] = freq 
+                attrs['format'] = '{0}D'.format(nchan)
+            elif col.name == 'DAT_WTS':
+                #attrs['array'] = np.ones((ntbin, nchan), dtype=np.float32)
+                attrs['array'] = np.ones(nchan, dtype=np.float32)
+                attrs['format'] = '{0}E'.format(nchan)
+            elif col.name == 'DAT_OFFS':
+                #attrs['array'] = np.ones((ntbin, nchan*npol), dtype=np.float32)
+                attrs['array'] = np.ones(nchan*npol, dtype=np.float32)
+                attrs['format'] = '{0}E'.format(nchan*npol)
+            elif col.name == 'DAT_SCL':
+                #attrs['array'] = np.ones((ntbin, nchan*npol), dtype=np.float32)
+                attrs['array'] = np.ones(nchan*npol, dtype=np.float32)
+                attrs['format'] = '{0}E'.format(nchan)
+            elif col.name == 'DATA':
+                # assign later?... memory hog.
+                attrs['array'] = np.zeros((ngate, nchan, npol), dtype='i1')
+                attrs['dim'] = "({},{},{})".format(ngate, nchan, npol) #TODO : allow multiple pols
+                attrs['format'] = "{0}I".format(ngate*nchan*npol)
+            newcols.append(FITS.Column(**attrs))
+
+        # newtable = FITS.new_table(fh['subint'].columns, nrows=ntbin)
+        newcoldefs = FITS.ColDefs(newcols)
+        newtable = FITS.new_table(newcoldefs, nrows=ntbin)
+        for card in fh['subint'].header.cards:
+            if card.key in ['NAXIS', 'NAXIS1', 'NAXIS2', 'PCOUNT', 'GCOUNT']:
+                continue
+            newtable.header.update(card.key, card.value, card.comment)
+
+        data_idx = [i for i, col in enumerate(newtable.columns)
+                    if col.name.upper() == 'DATA'][0]
+        newtable.columns[data_idx].dim = (ngate, nchan, 1)
+        dat_freq_idx = [i for i, col in enumerate(newtable.columns)
+                        if col.name.upper() == 'DAT_FREQ'][0]
+        newtable.columns[dat_freq_idx].format.repeat = nchan
+
+
+        subinttable = FITS.HDUList([fh['PRIMARY'], newtable])
+    else:
+        subinttable = None
+
+    return foldspec, icount, waterfall, subinttable
 
 
 class Folder(dict):

@@ -34,7 +34,8 @@ def reduce(telescope, obsdate, tstart, tend, nchan, ngate, ntbin, ntw_min=10200,
            do_waterfall=True, do_foldspec=True, dedisperse=None,verbose=True):
     comm = MPI.COMM_WORLD
     Obs = obsdata()
-    # find nearest observation to 'date', warning if > 1s off requested start time of observation
+    # find nearest observation to 'date', 
+    # warning if > 1s off requested start time of observation
     obskey = Obs[telescope].nearest_observation(obsdate)
     # target of this observation
     psr = Obs[telescope][obskey]['src']
@@ -90,7 +91,7 @@ def reduce(telescope, obsdate, tstart, tend, nchan, ngate, ntbin, ntw_min=10200,
                         do_foldspec=do_foldspec, verbose=verbose, progress_interval=1,
                         rfi_filter_raw=None, #AARrfi_filter_raw,
                         rfi_filter_power=None)
-        myfoldspec, myicount, mywaterfall = folder(fh, comm=comm)
+        myfoldspec, myicount, mywaterfall, mysubint = folder(fh, comm=comm)
         
         if do_waterfall:
             waterfall = np.zeros_like(mywaterfall)
@@ -151,7 +152,8 @@ def reduce(telescope, obsdate, tstart, tend, nchan, ngate, ntbin, ntw_min=10200,
 
     savefits = True
     if savefits and comm.rank == 0:
-        pass
+        subint = mysubint
+        # to be continued...
 
 def CL_parser():
     parser = argparse.ArgumentParser(prog='reduce_data.py',
@@ -208,39 +210,6 @@ def CL_parser():
     return parser.parse_args()
 
 
-def fold2psrfits(fh, data, dm):
-    """
-    * work in progress *
-    give the output data from the fold routine, 
-    save a psrfits file
-
-    """
-    ### temporary
-    if 0:
-     from astropy.io import fits as F
-     from scintellometry.folding import psrfits_tools as PT
-     f = np.load('rd_aroB1919+21foldspec_9.npy')
-     c = np.load('rd_aroB1919+21icount_9.npy')
-     data = normalize_counts(f, c)
-     nchan, ngate, ntbin = n.shape
-    ###
-
-    hdr = fh['subint'].header
-    hdr.update('NPOL', 1)
-    hdr.update('DM', dm)
-    # [data] = [nchan, ngate, ntbin]
-    nchan, ngate, ntbin = data.shape
-    
-    new = F.new_table(fh['subint'].columns, nrows=ntbin)
-    for card in fh['subint'].header.cards:
-        if card.key in ['NAXIS', 'NAXIS1', 'NAXIS2', 'PCOUNT', 'GCOUNT']:
-            continue
-        new.header.update(card.key, card.value, card.comment)
-    new.data['data'][:] = data
-    newout = F.HDUList([fh['PRIMARY'], new])
-    newout.writeto('delme.psrfits')
-    
-   
 if __name__ == '__main__':
     args = CL_parser()
     args.verbose = 0 if args.verbose is None else sum(args.verbose)
