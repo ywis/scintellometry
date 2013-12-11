@@ -149,6 +149,9 @@ def reduce(telescope, obsdate, tstart, tend, nchan, ngate, ntbin, ntw_min=10200,
             pmap('rd_{0}{1}folded3_{2}.pgm'.format(telescope, psr, node),
                  foldspec3, 0, verbose)
 
+    savefits = True
+    if savefits and comm.rank == 0:
+        pass
 
 def CL_parser():
     parser = argparse.ArgumentParser(prog='reduce_data.py',
@@ -204,6 +207,39 @@ def CL_parser():
     parser.add_argument('-v', '--verbose', action='append_const', const=1)
     return parser.parse_args()
 
+
+def fold2psrfits(fh, data, dm):
+    """
+    * work in progress *
+    give the output data from the fold routine, 
+    save a psrfits file
+
+    """
+    ### temporary
+    if 0:
+     from astropy.io import fits as F
+     from scintellometry.folding import psrfits_tools as PT
+     f = np.load('rd_aroB1919+21foldspec_9.npy')
+     c = np.load('rd_aroB1919+21icount_9.npy')
+     data = normalize_counts(f, c)
+     nchan, ngate, ntbin = n.shape
+    ###
+
+    hdr = fh['subint'].header
+    hdr.update('NPOL', 1)
+    hdr.update('DM', dm)
+    # [data] = [nchan, ngate, ntbin]
+    nchan, ngate, ntbin = data.shape
+    
+    new = F.new_table(fh['subint'].columns, nrows=ntbin)
+    for card in fh['subint'].header.cards:
+        if card.key in ['NAXIS', 'NAXIS1', 'NAXIS2', 'PCOUNT', 'GCOUNT']:
+            continue
+        new.header.update(card.key, card.value, card.comment)
+    new.data['data'][:] = data
+    newout = F.HDUList([fh['PRIMARY'], new])
+    newout.writeto('delme.psrfits')
+    
    
 if __name__ == '__main__':
     args = CL_parser()
