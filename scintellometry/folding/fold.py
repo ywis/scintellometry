@@ -306,54 +306,43 @@ def fold(fh, comm, dtype, samplerate, fedge, fedge_at_top, nchan,
         # TODO: allow multiple polarizations
         npol = 1
         newcols = []
+        # FITS table creation difficulties... assign data *after* 'new_table' creation
+        array2assign = {}
         for col in fh['subint'].columns:
             attrs = col.__dict__
             # remove non-init args
-            for nn in ['_pseudo_unsigned_ints', '_dims', '_physical_values','dtype', '_phantom']:
+            for nn in ['_pseudo_unsigned_ints', '_dims', '_physical_values',
+                       'dtype', '_phantom', 'array']:
                 attrs.pop(nn, None)
 
             if col.name == 'TSUBINT':
-                attrs['array'] = tsubint
+                array2assign[col.name] = tsubint
             elif col.name == 'OFFS_SUB':
-                attrs['array'] = np.arange(ntbin) * tsubint 
+                array2assign[col.name] = np.arange(ntbin) * tsubint 
             elif col.name == 'DAT_FREQ':
-                #attrs['array'] = (freq.reshape(-1, freq.size)).repeat(ntbin, axis=0)
-                attrs['array'] = freq 
+                array2assign[col.name] = freq 
                 attrs['format'] = '{0}D'.format(nchan)
             elif col.name == 'DAT_WTS':
-                #attrs['array'] = np.ones((ntbin, nchan), dtype=np.float32)
-                attrs['array'] = np.ones(nchan, dtype=np.float32)
+                array2assign[col.name] = np.ones(nchan, dtype=np.float32)
                 attrs['format'] = '{0}E'.format(nchan)
             elif col.name == 'DAT_OFFS':
-                #attrs['array'] = np.ones((ntbin, nchan*npol), dtype=np.float32)
-                attrs['array'] = np.ones(nchan*npol, dtype=np.float32)
+                array2assign[col.name] = np.ones(nchan*npol, dtype=np.float32)
                 attrs['format'] = '{0}E'.format(nchan*npol)
             elif col.name == 'DAT_SCL':
-                #attrs['array'] = np.ones((ntbin, nchan*npol), dtype=np.float32)
-                attrs['array'] = np.ones(nchan*npol, dtype=np.float32)
+                array2assign[col.name] = np.ones(nchan*npol, dtype=np.float32)
                 attrs['format'] = '{0}E'.format(nchan)
             elif col.name == 'DATA':
-                # assign later?... memory hog.
-                attrs['array'] = np.zeros((ngate, nchan, npol), dtype='i1')
+                array2assign[col.name] = np.zeros((ngate, nchan, npol), dtype='i1')
                 attrs['dim'] = "({},{},{})".format(ngate, nchan, npol) #TODO : allow multiple pols
                 attrs['format'] = "{0}I".format(ngate*nchan*npol)
             newcols.append(FITS.Column(**attrs))
-
         # newtable = FITS.new_table(fh['subint'].columns, nrows=ntbin)
         newcoldefs = FITS.ColDefs(newcols)
-        newtable = FITS.new_table(newcoldefs, nrows=ntbin)
-        for card in fh['subint'].header.cards:
-            if card.key in ['NAXIS', 'NAXIS1', 'NAXIS2', 'PCOUNT', 'GCOUNT']:
-                continue
-            newtable.header.update(card.key, card.value, card.comment)
+        newtable = FITS.new_table(newcoldefs, nrows=ntbin, header = fh['subint'].header)
 
-        data_idx = [i for i, col in enumerate(newtable.columns)
-                    if col.name.upper() == 'DATA'][0]
-        newtable.columns[data_idx].dim = (ngate, nchan, 1)
-        dat_freq_idx = [i for i, col in enumerate(newtable.columns)
-                        if col.name.upper() == 'DAT_FREQ'][0]
-        newtable.columns[dat_freq_idx].format.repeat = nchan
-
+        # finally assign the table data
+        for name, array in array2assign.iteritems():
+            newtable.data.field(name)[:] = array
 
         subinttable = FITS.HDUList([fh['PRIMARY'], newtable])
     else:

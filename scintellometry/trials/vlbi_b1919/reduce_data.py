@@ -91,7 +91,7 @@ def reduce(telescope, obsdate, tstart, tend, nchan, ngate, ntbin, ntw_min=10200,
                         do_foldspec=do_foldspec, verbose=verbose, progress_interval=1,
                         rfi_filter_raw=None, #AARrfi_filter_raw,
                         rfi_filter_power=None)
-        myfoldspec, myicount, mywaterfall, mysubint = folder(fh, comm=comm)
+        myfoldspec, myicount, mywaterfall, subinttable = folder(fh, comm=comm)
         
         if do_waterfall:
             waterfall = np.zeros_like(mywaterfall)
@@ -152,7 +152,14 @@ def reduce(telescope, obsdate, tstart, tend, nchan, ngate, ntbin, ntw_min=10200,
 
     savefits = True
     if savefits and comm.rank == 0:
-        subint = mysubint
+        subint_table = mysubint_table
+        # assign the folded data ( [f2] = [nchan, ngate, ntbin]
+        #                          want [ngate, nchan, npol, ntbin]
+        nchan, ngate, ntbin = f2.shape
+        f2 = f2.transpose(1,0,2,3)
+        f2 = f2.reshape(ngate, nchan, np.newaxis, ntbin)
+        subint_table.data.field('DATA')[:] = f2
+        subint_table.writeto('{0}{1}folded3_{2}+{3:08}.fits'.format(telescope, psr, tstart, dt.sec))
         # to be continued...
 
 def CL_parser():
@@ -249,4 +256,5 @@ if __name__ == '__main__':
         nchan=args.nchan, ngate=args.ngate, ntbin=args.ntbin, ntw_min=args.ntw_min,
         rfi_filter_raw=args.rfi_filter_raw,
         do_waterfall=args.waterfall, do_foldspec=args.foldspec,
-        dedisperse=args.dedisperse, verbose=args.verbose)
+        dedisperse=args.dedisperse, verbose=args.verbose
+)
