@@ -99,9 +99,6 @@ def fold(fh, comm, dtype, samplerate, fedge, fedge_at_top, nchan,
         if verbose and rank == 0:
             print('Skipping {0} records = {1} bytes'
                   .format(nskip, nskip*fh.recsize))
-        if size == 1:
-            # MPI: only skip here if we are not threaded, otherwise seek in for-loop
-            fh.seek(nskip * count * itemsize)
 
     # LOFAR data is already channelized
     if hasattr(fh, 'fwidth'):
@@ -192,8 +189,7 @@ def fold(fh, comm, dtype, samplerate, fedge, fedge_at_top, nchan,
         # better keep at least the work done
         try:
             # MPI processes read like a slinky
-            if size > 1:
-                fh.seek( (nskip+j) * count * itemsize)
+            fh.seek( (nskip+j) * count * itemsize)
 
             # ARO/GMRT return int-stream, LOFAR returns complex64 (count/nchan, nchan)
             raw = fh.record_read(count)

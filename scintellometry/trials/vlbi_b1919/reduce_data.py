@@ -50,9 +50,6 @@ def reduce(telescope, obsdate, tstart, tend, nchan, ngate, ntbin, ntw_min=10200,
     elif telescope == 'gmrt':
         GenericOpen = GMRTdata
 
-    # need to fix for lofar and gmrt
-    node = Obs[telescope]['node']
-
     foldspecs = []
     icounts = []
     waterfalls = []
@@ -68,15 +65,18 @@ def reduce(telescope, obsdate, tstart, tend, nchan, ngate, ntbin, ntw_min=10200,
         samplerate = fh.samplerate
 
         # number of records to skip
+        if isinstance(tstart, str):
+            tstart = Time(tstart, scale='utc')
+        if isinstance(tend, str):
+            tend = Time(tend, scale='utc')
+        dt = tend - tstart
         nskip = fh.nskip(tstart)    # number of records to skip
         if verbose and comm.rank == 0:
             print("Using start time {0} and phase polynomial {1}"
                   .format(time0, phasepol))
             print("Skipping {0} records and folding {1} records to cover "
                   "time span {2} to {3}"
-                  .format(nskip, nt,
-                          time0 + nskip * fh.recsize * 2 / samplerate,
-                          time0 + (nskip+nt) * fh.recsize * 2 / samplerate))
+                  .format(nskip, nt, tstart, tend))
 
         # set the default parameters to fold
         # Note, some parameters may be in fh's HDUs, or fh.__getitem__
@@ -107,23 +107,23 @@ def reduce(telescope, obsdate, tstart, tend, nchan, ngate, ntbin, ntw_min=10200,
                 foldspecs.append(foldspec)
                 icounts.append(icount)
                 this_f = normalize_counts(foldspec, icount)
-                fname = ("rd_{0}{1}foldspec_idx{2}_node{3}.npy")
-                iname = ("rd_{0}{1}icount_idx{2}_node{3}.npy")
-                np.save(fname.format(telescope, psr, idx, node), foldspec)
-                np.save(iname.format(telescope, psr, idx, node), icount)
+                fname = ("{0}{1}foldspec_idx{2}_{3}+{4:08}sec.npy")
+                iname = ("{0}{1}icount_idx{2}_{3}+{4:08}sec.npy")
+                np.save(fname.format(telescope, psr, idx, tstart, dt.sec), foldspec)
+                np.save(iname.format(telescope, psr, idx, tstart, dt.sec), icount)
     # end file loop (mostly for lofar subbands)
 
 
     if do_waterfall and  comm.rank == 0:
             waterfall = normalize_counts(np.concatenate(waterfalls, axis=0))
-            np.save("rd_{0}{1}waterfall_{2}.npy"
-                    .format(telescope, psr, node), waterfall)
+            np.save("{0}{1}waterfall_{2}+{3:08}sec.npy"
+                    .format(telescope, psr, tstart, dt.sec), waterfall)
 
     if do_foldspec and comm.rank == 0:
         foldspec = np.concatenate(foldspecs, axis=0)
         icount = np.concatenate(icounts, axis=0)
-        np.save("rd_{0}{1}foldspec_{2}".format(telescope,psr, node), foldspec)
-        np.save("rd_{0}{1}icount_{2}".format(telescope, psr, node), icount)
+        np.save("{0}{1}foldspec_{2}+{3:08}sec".format(telescope,psr, tstart, dt.sec), foldspec)
+        np.save("{0}{1}icount_{2}+{3:08}sec".format(telescope, psr, tstart, dt.sec), icount)
 
         # get normalized flux in each bin (where any were added)
         f2 = normalize_counts(foldspec, icount)
@@ -131,7 +131,7 @@ def reduce(telescope, obsdate, tstart, tend, nchan, ngate, ntbin, ntw_min=10200,
         fluxes = foldspec1.sum(axis=0)
         foldspec3 = f2.sum(axis=0)
 
-        with open('rd_{0}{1}flux_{2}.dat'.format(telescope, psr, node), 'w') as f:
+        with open('{0}{1}flux_{2}+{3:08}sec.dat'.format(telescope, psr, tstart, dt.sec), 'w') as f:
             for i, flux in enumerate(fluxes):
                 f.write('{0:12d} {1:12.9g}\n'.format(i+1, flux))
 
@@ -139,14 +139,14 @@ def reduce(telescope, obsdate, tstart, tend, nchan, ngate, ntbin, ntw_min=10200,
     if plots and comm.rank == 0:
         if do_waterfall:
             w = waterfall.copy()
-            pmap('rd_{0}{1}waterfall_{2}.pgm'.format(telescope, psr, node),
+            pmap('{0}{1}waterfall_{2}+{3:08}sec.pgm'.format(telescope, psr, tstart, dt.sec),
                  w, 1, verbose=True)
         if do_foldspec:
-            pmap('rd_{0}{1}folded_{2}.pgm'.format(telescope, psr, node),
+            pmap('{0}{1}folded_{2}+{3:08}sec.pgm'.format(telescope, psr, tstart, dt.sec),
                  foldspec1, 0, verbose)
-            pmap('rd_{0}{1}foldedbin_{2}.pgm'.format(telescope, psr, node),
+            pmap('{0}{1}foldedbin_{2}+{3:08}sec.pgm'.format(telescope, psr, tstart, dt.sec),
                  f2.transpose(0,2,1).reshape(nchan,-1), 1, verbose)
-            pmap('rd_{0}{1}folded3_{2}.pgm'.format(telescope, psr, node),
+            pmap('{0}{1}folded3_{2}+{3:08}sec.pgm'.format(telescope, psr, tstart, dt.sec),
                  foldspec3, 0, verbose)
 
 
