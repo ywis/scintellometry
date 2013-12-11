@@ -91,7 +91,7 @@ def reduce(telescope, obsdate, tstart, tend, nchan, ngate, ntbin, ntw_min=10200,
                         do_foldspec=do_foldspec, verbose=verbose, progress_interval=1,
                         rfi_filter_raw=None, #AARrfi_filter_raw,
                         rfi_filter_power=None)
-        myfoldspec, myicount, mywaterfall, subinttable = folder(fh, comm=comm)
+        myfoldspec, myicount, mywaterfall, subint_table = folder(fh, comm=comm)
         
         if do_waterfall:
             waterfall = np.zeros_like(mywaterfall)
@@ -113,7 +113,6 @@ def reduce(telescope, obsdate, tstart, tend, nchan, ngate, ntbin, ntw_min=10200,
                 np.save(fname.format(telescope, psr, idx, tstart, dt.sec), foldspec)
                 np.save(iname.format(telescope, psr, idx, tstart, dt.sec), icount)
     # end file loop (mostly for lofar subbands)
-
 
     if do_waterfall and  comm.rank == 0:
             waterfall = normalize_counts(np.concatenate(waterfalls, axis=0))
@@ -152,14 +151,19 @@ def reduce(telescope, obsdate, tstart, tend, nchan, ngate, ntbin, ntw_min=10200,
 
     savefits = True
     if savefits and comm.rank == 0:
-        subint_table = mysubint_table
+        print("Saving FITS files...")
         # assign the folded data ( [f2] = [nchan, ngate, ntbin]
-        #                          want [ngate, nchan, npol, ntbin]
+        #                          want [ntbin, npol, nchan, ngate] 
         nchan, ngate, ntbin = f2.shape
-        f2 = f2.transpose(1,0,2,3)
-        f2 = f2.reshape(ngate, nchan, np.newaxis, ntbin)
-        subint_table.data.field('DATA')[:] = f2
-        subint_table.writeto('{0}{1}folded3_{2}+{3:08}.fits'.format(telescope, psr, tstart, dt.sec))
+        f2 = f2.transpose(2, 0, 1)
+        f2 = f2.reshape(ntbin, np.newaxis, nchan, ngate)
+        subint_table[1].data.field('DATA')[:] = f2
+        print("INFO", subint_table.info(), subint_table['SUBINT'].header['DM'])
+#        print("S", subint_table[0].header)
+#        print("\nSI", subint_table[1].header)
+        #subint_table.verify(option='fix') 
+        fout = '{0}{1}folded3_{2}+{3:08}.fits'.format(telescope, psr, tstart, dt.sec)
+        subint_table.writeto(fout, output_verify='silentfix', clobber=True)
         # to be continued...
 
 def CL_parser():

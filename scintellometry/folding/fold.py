@@ -5,18 +5,18 @@ from inspect import getargspec
 import numpy as np
 import os
 import astropy.units as u
-impor astropy.io.fits as FITS
+import astropy.io.fits as FITS
 
 try:
     import pyfftw
     pyfftw.interfaces.cache.enable()
-    from pyfftw.interfaces.scipy_fftpack import rfft, rfftfreq, irfft, fft, ifft, fftfreq
+    from pyfftw.interfaces.scipy_fftpack import rfft, rfftfreq, irfft, fft, ifft, fftfreq, fftshift
     _fftargs = {'threads': os.environ.get('OMP_NUM_THREADS', 2),
                 'planner_effort': 'FFTW_ESTIMATE'}
 except(ImportError):
     print("Consider installing pyfftw: https://github.com/hgomersall/pyFFTW")
     # use FFT from scipy, since unlike numpy it does not cast up to complex128
-    from scipy.fftpack import rfft, rfftfreq, irfft, fft, ifft, fftfreq
+    from scipy.fftpack import rfft, rfftfreq, irfft, fft, ifft, fftfreq, fftshift
     _fftargs = {}
 
 from fromfile import fromfile
@@ -134,13 +134,20 @@ def fold(fh, comm, dtype, samplerate, fedge, fedge_at_top, nchan,
 
     # pre-calculate time delay due to dispersion in coarse channels
     # LOFAR data is already channelized
-    if hasattr(fh, 'freqs'):
+    if fh.telescope == 'lofar':
         freq = fh.freqs
-    else:
+    elif fh.telescope == 'aro':
         if fedge_at_top:
             freq = fedge - thisfftfreq(nchan*2, dt1.value) * u.Hz
         else:
             freq = fedge + thisfftfreq(nchan*2, dt1.value) * u.Hz
+    elif fh.telescope == 'gmrt':
+        freq = fftshift(fftfreq(nchan, 2.*dt1.value)) * u.Hz
+        if fedge_at_top:
+            freq = fedge - (freq-freq[0])
+        else:   
+            freq = fedge + (freq-freq[0])
+
   
     if fh.telescope == 'aro':
         # ARO data
@@ -288,39 +295,30 @@ def fold(fh, comm, dtype, samplerate, fedge, fedge_at_top, nchan,
         print('read {0:6d} out of {1:6d}'.format(j+1, nt))
 
     if return_fits and rank == 0:
-        # update the 'subint' header and create a new one to be returned
-        # owing to the structure of the code (MPI), we need to assign
-        # the 'DATA' outside of fold.py   
-        fh['SUBINT'].header.update('NPOL', 1)
-        fh['SUBINT'].header.update('NBIN', 1)
-        fh['SUBINT'].header.update('NBIN_PRD', ngate)
-        fh['SUBINT'].header.update('NCHAN', nchan)
-        # AAR: entered random chan_bw... TODO
-        fh['SUBINT'].header.update('CHAN_BW', 0.197)
-        if dedisperse in ['coherent', 'by-channel', 'incoherent']:
-            fh['SUBINT'].header.update('DM', dm.value)
-
-        # subint data
-
+        # subintu HDU
         # update table columns
         # TODO: allow multiple polarizations
         npol = 1
         newcols = []
         # FITS table creation difficulties... assign data *after* 'new_table' creation
         array2assign = {}
+        tsubint = ntint*dtsample
         for col in fh['subint'].columns:
-            attrs = col.__dict__
+            attrs = col.copy().__dict__
             # remove non-init args
             for nn in ['_pseudo_unsigned_ints', '_dims', '_physical_values',
                        'dtype', '_phantom', 'array']:
                 attrs.pop(nn, None)
 
             if col.name == 'TSUBINT':
-                array2assign[col.name] = tsubint
+                array2assign[col.name] = np.array(tsubint)
             elif col.name == 'OFFS_SUB':
                 array2assign[col.name] = np.arange(ntbin) * tsubint 
             elif col.name == 'DAT_FREQ':
-                array2assign[col.name] = freq 
+                if freq.ndim == 1:
+                    array2assign[col.name] = freq.to(u.MHz).value
+                else:
+                    array2assign[col.name] = freq[0,:].to(u.MHz).value
                 attrs['format'] = '{0}D'.format(nchan)
             elif col.name == 'DAT_WTS':
                 array2assign[col.name] = np.ones(nchan, dtype=np.float32)
@@ -332,22 +330,31 @@ def fold(fh, comm, dtype, samplerate, fedge, fedge_at_top, nchan,
                 array2assign[col.name] = np.ones(nchan*npol, dtype=np.float32)
                 attrs['format'] = '{0}E'.format(nchan)
             elif col.name == 'DATA':
-                array2assign[col.name] = np.zeros((ngate, nchan, npol), dtype='i1')
+                array2assign[col.name] = np.zeros((ntbin, npol, nchan, ngate), dtype='i1')
                 attrs['dim'] = "({},{},{})".format(ngate, nchan, npol) #TODO : allow multiple pols
                 attrs['format'] = "{0}I".format(ngate*nchan*npol)
             newcols.append(FITS.Column(**attrs))
-        # newtable = FITS.new_table(fh['subint'].columns, nrows=ntbin)
         newcoldefs = FITS.ColDefs(newcols)
-        newtable = FITS.new_table(newcoldefs, nrows=ntbin, header = fh['subint'].header)
-
+        newtable = FITS.new_table(newcoldefs, nrows=ntbin, header = fh['subint'].header)#.copy())
+        # update the 'subint' header and create a new one to be returned
+        # owing to the structure of the code (MPI), we need to assign
+        # the 'DATA' outside of fold.py   
+        newtable.header.update('NPOL', 1)
+        newtable.header.update('NBIN', 1)
+        newtable.header.update('NBIN_PRD', ngate)
+        newtable.header.update('NCHAN', nchan)
+        chan_bw = np.diff(freq.value).mean()
+        newtable.header.update('CHAN_BW', chan_bw)
+        if dedisperse in ['coherent', 'by-channel', 'incoherent']:
+            newtable.header.update('DM', dm.value)
         # finally assign the table data
         for name, array in array2assign.iteritems():
             newtable.data.field(name)[:] = array
-
         subinttable = FITS.HDUList([fh['PRIMARY'], newtable])
+        subinttable[1].header.update('EXTNAME', 'SUBINT')
     else:
-        subinttable = None
-
+        subinttable = FITS.HDUList([])
+  
     return foldspec, icount, waterfall, subinttable
 
 
@@ -389,8 +396,8 @@ class Folder(dict):
             print("Missing 'fold' arguments: {}".format(missing))
                 
     def __call__(self, fh, comm=None):
-        ifold, icount, water = fold(fh, comm=comm, **self)
-        return ifold, icount, water
+        ifold, icount, water, subint = fold(fh, comm=comm, **self)
+        return ifold, icount, water, subint
 
 
 def normalize_counts(q, count=None):
