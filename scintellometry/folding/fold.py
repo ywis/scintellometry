@@ -287,6 +287,16 @@ def fold(fh, comm, dtype, samplerate, fedge, fedge_at_top, nchan,
     if verbose:
         print('read {0:6d} out of {1:6d}'.format(j+1, nt))
 
+    # update the 'subint' header
+    fh['SUBINT'].header.update('NPOL', 1)
+    fh['SUBINT'].header.update('NBIN', 1)
+    fh['SUBINT'].header.update('NBIN_PRD', ngate)
+    fh['SUBINT'].header.update('NCHAN', nchan)
+    # AAR: entered random chan_bw... TODO
+    fh['SUBINT'].header.update('CHAN_BW', 0.197)
+    if dedisperse in ['coherent', 'by-channel', 'incoherent']:
+        fh['SUBINT'].header.update('DM', dm)
+
     return foldspec, icount, waterfall
 
 
