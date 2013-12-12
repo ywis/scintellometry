@@ -168,6 +168,10 @@ class AROdata(multifile):
             fh.Seek(np.count_nonzero(self.sequence['raw'][:self.index] == i) *
                     self.recsize)
 
+    def seek_record_read(self, offset, count):
+        self.seek(offset)
+        return self.record_read(count)
+
     def __repr__(self):
         return ("<open multifile raw_voltage_files {} "
                 "using sequence file '{}' at index {}>"
@@ -345,10 +349,160 @@ class LOFARdata(multifile):
         self.fh1.Seek(offset)
         self.fh2.Seek(offset)
 
+    def seek_record_read(self, offset, count):
+        self.seek(offset)
+        return self.record_read(count)
+
     def __repr__(self):
         return ("<open lofar polarization pair {} and {}>"
                 .format(os.path.basename(self.fname1), os.path.basename(self.fname2)))
 
+class LOFARdata_Pcombined(multifile):
+    """
+    convenience class to combine multiple subbands, making them act 
+    as a single file.
+
+    """
+    def __init__(self, filelist, comm=None):
+        """
+        A list of tuples, to be 'concatenated' together
+        (as returned by observations.obsdata[telescope].file_list(obskey) )
+        """
+        self.telescope = 'lofar'
+        if comm is None:
+            self.comm = MPI.COMM_SELF
+        else:
+            self.comm = comm
+        self.filelist = filelist
+        super(LOFARdata_Pcombined, self).__init__(hdus=['SUBINT'])
+        self.set_hdu_defaults(_LOFAR_defs)
+
+        self.fh_subbands = []
+        for filetuple in filelist:
+            self.fh_subbands.append(LOFARdata(*filetuple, comm=self.comm))
+
+        # make sure basic properties of the files are the same
+        for prop in ['dtype', 'setsize', 'time0', 'samplerate', 'fwidth', 'nchan']:
+            props = [fh.__dict__[prop] for fh in self.fh_subbands]
+            if prop == 'time0':
+                props = [p.isot for p in props]
+            assert len(set(props)) == 1
+            self.__setattr__(prop, self.fh_subbands[0].__dict__[prop])
+
+        self.recsize = sum([fh.recsize for fh in self.fh_subbands])
+ 
+        self.itemsize = _bytes_per_sample.get(self.dtype, None)
+        if self.itemsize is None:
+            self.itemsize = np.dtype(self.dtype).itemsize
+
+        freqs = np.concatenate([fh.freqs.to(u.MHz).value for fh in self.fh_subbands])*u.MHz
+        self.freqs = freqs
+        self.nchans = [fh.nchan for fh in self.fh_subbands]
+        self.nchan = freqs.value.size
+        self.fbottom = freqs[0]
+        self.fedge = freqs[0]
+        self.fedge_at_top = False
+        # update some of the hdu data
+        self['PRIMARY'].header['DATE-OBS'] = self.time0.iso
+        self['PRIMARY'].header.update('TBIN', (1./samplerate).to('s').value)
+        self['PRIMARY'].header.update('NCHAN', self.nchan)
+ 
+    def close(self):
+        for fh in self.fh_subbands:
+            fh.close()
+
+    def nskip(self, date, time0=None):
+        """
+        return the number of records needed to skip from start of
+        file to iso timestamp 'date'.
+
+        Optionally:
+        time0 : use this start time instead of self.time0
+                either a astropy.time.Time object or string in 'utc'
+
+        """
+        if time0 is None:
+            time0 = self.time0
+        elif isinstance(time0, str):
+            time0 = Time(time0, scale='utc')
+
+        dt = (Time(date, scale='utc')-time0)
+        nskip = int(round( (dt/(self.ntint(None) / self.fwidth)).to(u.dimensionless_unscaled)))
+        return nskip
+
+    def ntimebins(self, t0, t1):
+        """
+        determine the number of timebins between UTC start time 't0'
+        and end time 't1'
+        """
+        if isinstance(t0, str):
+            t0 = Time(t0, scale='utc')
+        if isinstance(t1, str):
+            t1 = Time(t1, scale='utc')
+        nt = ((t1-t0)*self.fwidth/(self.setsize)).to(u.dimensionless_unscaled).value
+        return np.ceil(nt).astype(int)
+
+    def ntint(self, *args):
+        """
+        number of samples in an integration
+        Lofar data is already channelized so we assert 
+        nchan is the same
+        """
+        # LOFAR is already channelized, we accept args for generalization
+        return self.recsize // (4 * self.nchan)
+
+    def read(self, size):
+        # we don't actually use this
+        z1s = []
+        z2s = []
+        for fh in self.fh_subbands:
+            frac_size = (size*fh.nchan) // self.nchan # self.nchan = \sum fh(nchan)
+            if (size * fh.nchan) % self.nchan != 0:
+                raise Warning('Read error in (combined) Lofar record_read')
+            z1, z2 = fh.read(frac_size) 
+            z1s.append(z1)
+            z2s.append(z2)
+        return np.concatenate(z1s), np.concatenate(z2s)
+
+    def record_read(self, size):
+        recs = []
+        for fh in self.fh_subbands:
+            frac_size = (size*fh.nchan) // self.nchan # self.nchan = \sum fh(nchan)
+            if (size * fh.nchan) % self.nchan != 0:
+                raise Warning('Read error in (combined) Lofar record_read')
+            recs.append(fh.record_read(frac_size))
+        return np.hstack(recs)
+ 
+    def seek(self, offset):
+        for fh in self.fh_subbands:
+            frac_offset = (offset*fh.nchan) // self.nchan
+            if (offset * fh.nchan) % self.nchan != 0:
+                raise Warning('Read error in (combined) Lofar seek')
+            fh.seek(frac_offset)
+
+    def seek_record_read(self, offset, size):
+        """
+        LOFARdata_Pcombined class opens a lot of filehandles.
+        This routine tries to minimize file seeks
+        """
+        recs = []
+        for fh in self.fh_subbands:
+            frac_offset = (offset*fh.nchan) // self.nchan
+            if (offset * fh.nchan) % self.nchan != 0:
+                raise Warning('Read error in (combined) Lofar seek')
+            fh.seek(frac_offset)
+
+            frac_size = (size*fh.nchan) // self.nchan # self.nchan = \sum fh(nchan)
+            if (size * fh.nchan) % self.nchan != 0:
+                raise Warning('Read error in (combined) Lofar record_read')
+            recs.append(fh.record_read(frac_size))
+        return np.hstack(recs)
+
+    def __repr__(self):
+        return ("<open (concatenated) lofar polarization pair from {} to {}>"
+                .format(os.path.basename(self.fh_subbands[0].fname1), 
+                        os.path.basename(self.fh_subbands[-1].fname2)))
+ 
 # LOFAR defaults for psrfits HDUs
 _LOFAR_defs = {}
 _LOFAR_defs['PRIMARY'] = {'TELESCOP':'LOFAR',
@@ -477,6 +631,10 @@ class GMRTdata(multifile):
         for i, fh in enumerate(self.fh_raw):
             fh.Seek(np.count_nonzero(self.indices[:self.index] == i) *
                     self.recsize)
+
+    def seek_record_read(self, offset, count):
+        self.seek(offset)
+        return self.record_read(count)
 
     @property
     def time(self):

@@ -8,7 +8,7 @@ from astropy.time import Time
 
 from scintellometry.folding.fold import Folder, normalize_counts
 from scintellometry.folding.pmap import pmap
-from scintellometry.folding.filehandlers import AROdata, LOFARdata, GMRTdata
+from scintellometry.folding.filehandlers import AROdata, LOFARdata, LOFARdata_Pcombined, GMRTdata
 
 from observations import obsdata
 
@@ -48,22 +48,26 @@ def reduce(telescope, obsdate, tstart, tend, nchan, ngate, ntbin, ntw_min=10200,
         GenericOpen = AROdata
     elif telescope == 'lofar':
         GenericOpen = LOFARdata
+        #GenericOpen = LOFARdata_Pcombined
     elif telescope == 'gmrt':
         GenericOpen = GMRTdata
 
     foldspecs = []
     icounts = []
     waterfalls = []
-    
+    idx = 0 
     for idx, fname in enumerate(files):
       with GenericOpen(*fname, comm=comm) as fh:
+    #    with GenericOpen(files, comm=comm) as fh:
+        # None means data is channelized already, so we get this property
+        # directly from the file
+        if nchan is None:
+            nchan = fh.nchan
         time0 = fh.time0
         phasepol = Obs[telescope][obskey].get_phasepol(time0)
         nt = fh.ntimebins(tstart, tend)
         ntint = fh.ntint(nchan)
         ntw = min(ntw_min, nt*ntint)  # number of samples to combine for waterfall
-
-        samplerate = fh.samplerate
 
         # number of records to skip
         if isinstance(tstart, str):
@@ -144,6 +148,9 @@ def reduce(telescope, obsdate, tstart, tend, nchan, ngate, ntbin, ntw_min=10200,
         if do_foldspec:
             pmap('{0}{1}folded_{2}+{3:08}sec.pgm'.format(telescope, psr, tstart, dt.sec),
                  foldspec1, 0, verbose)
+            # TODO: Note, I (aaron) don't think this works for LOFAR data since nchan=20,
+            # but we concatenate several subband files together, so f2.nchan = N_concat * nchan
+            # It should work for my "new" LOFAR_Pconcate file class
             pmap('{0}{1}foldedbin_{2}+{3:08}sec.pgm'.format(telescope, psr, tstart, dt.sec),
                  f2.transpose(0,2,1).reshape(nchan,-1), 1, verbose)
             pmap('{0}{1}folded3_{2}+{3:08}sec.pgm'.format(telescope, psr, tstart, dt.sec),
@@ -155,9 +162,11 @@ def reduce(telescope, obsdate, tstart, tend, nchan, ngate, ntbin, ntw_min=10200,
         # assign the folded data ( [f2] = [nchan, ngate, ntbin]
         #                          want [ntbin, npol, nchan, ngate] 
 
-        # TODO: accomodate lofar data, which concatenates the channels so f2 = len(range(P))*nchan
+        # TODO: figure out lofar and aro data, which concatenates the channels so f2 = len(range(P))*nchan
         if telescope == 'lofar':
             f2 = f2[-nchan:]
+        elif telescope == 'aro':
+            f2 = f2[0:nchan] 
         nchan, ngate, ntbin = f2.shape
         f2 = f2.transpose(2, 0, 1)
         f2 = f2.reshape(ntbin, np.newaxis, nchan, ngate)
@@ -165,7 +174,12 @@ def reduce(telescope, obsdate, tstart, tend, nchan, ngate, ntbin, ntw_min=10200,
         subint_table[1].data.field('DATA')[:] = (2**16*f2/std).astype(np.int16)
         fout = '{0}{1}folded3_{2}+{3:08}sec.fits'.format(telescope, psr, tstart, dt.sec)
         # Note: output_verify != 'ignore' resets the cards for some reason
-        subint_table.writeto(fout, output_verify='ignore', clobber=True)
+        try:
+            subint_table.writeto(fout, output_verify='ignore', clobber=True)
+        except ValueError:
+            print("FITS writings is a work in progress: need to come to terms with array shapes")
+            print("f2.shape, subint_table[1].data.field('DATA')[:].shape = ", f2.shape, 
+                  subint_table[1].data.field('DATA')[:].shape) 
 
 def CL_parser():
     parser = argparse.ArgumentParser(prog='reduce_data.py',
@@ -228,7 +242,8 @@ if __name__ == '__main__':
     args.rfi_filter_raw = rfi_filter_raw
     if args.reduction_defaults == 'lofar':
         args.telescope = 'lofar'
-        args.nchan = 20
+        # already channelized, determined from filehandle (previously args.nchan = 20)
+        args.nchan = None
         args.ngate =  512
         args.date = '2013-05-05' # Note, dates are made up for now
         #args.nt = 180

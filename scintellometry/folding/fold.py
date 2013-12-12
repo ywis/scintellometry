@@ -1,4 +1,3 @@
-""" FFT and Fold data """
 from __future__ import division, print_function
 
 from inspect import getargspec
@@ -23,7 +22,7 @@ from fromfile import fromfile
 
 dispersion_delay_constant = 4149. * u.s * u.MHz**2 * u.cm**3 / u.pc
 
-def fold(fh, comm, dtype, samplerate, fedge, fedge_at_top, nchan,
+def fold(fh, comm, samplerate, fedge, fedge_at_top, nchan,
          nt, ntint, nskip, ngate, ntbin, ntw, dm, fref, phasepol,
          dedisperse='incoherent',
          do_waterfall=True, do_foldspec=True, verbose=True,
@@ -37,8 +36,6 @@ def fold(fh, comm, dtype, samplerate, fedge, fedge_at_top, nchan,
     fh : file handle
         handle to file holding voltage timeseries
     comm: MPI communicator or None
-    dtype : numpy dtype or '4bit' or '1bit'
-        way the data are stored in the file
     samplerate : float
         rate at which samples were originally taken and thus double the
         band width (frequency units)
@@ -199,12 +196,10 @@ def fold(fh, comm, dtype, samplerate, fedge, fedge_at_top, nchan,
         # just in case numbers were set wrong -- break if file ends
         # better keep at least the work done
         try:
-            # MPI processes read like a slinky
-            fh.seek( (nskip+j) * count * itemsize)
-
             # ARO/GMRT return int-stream, LOFAR returns complex64 (count/nchan, nchan)
-            raw = fh.record_read(count)
-
+            # LOFAR "combined" file class can do lots of seeks, we minimize that with
+            # the 'seek_record_read' routine
+            raw = fh.seek_record_read( (nskip+j)*count*itemsize, count)
         except(EOFError, IOError) as exc:
             print("Hit {}; writing pgm's".format(exc))
             break
@@ -331,14 +326,16 @@ def fold(fh, comm, dtype, samplerate, fedge, fedge_at_top, nchan,
                 attrs['format'] = '{0}E'.format(nchan)
             elif col.name == 'DATA':
                 array2assign[col.name] = np.zeros((ntbin, npol, nchan, ngate), dtype='i1')
-                attrs['dim'] = "({},{},{})".format(ngate, nchan, npol) #TODO : allow multiple pols
+                attrs['dim'] = "({},{},{})".format(ngate, nchan, npol) 
                 attrs['format'] = "{0}I".format(ngate*nchan*npol)
             newcols.append(FITS.Column(**attrs))
         newcoldefs = FITS.ColDefs(newcols)
-        newtable = FITS.new_table(newcoldefs, nrows=ntbin, header = fh['subint'].header)#.copy())
+
+        oheader = fh['SUBINT'].header.copy()
+        newtable = FITS.new_table(newcoldefs, nrows=ntbin, header=oheader)
         # update the 'subint' header and create a new one to be returned
         # owing to the structure of the code (MPI), we need to assign
-        # the 'DATA' outside of fold.py   
+        # the 'DATA' outside of fold.py 
         newtable.header.update('NPOL', 1)
         newtable.header.update('NBIN', 1)
         newtable.header.update('NBIN_PRD', ngate)
@@ -349,8 +346,13 @@ def fold(fh, comm, dtype, samplerate, fedge, fedge_at_top, nchan,
             newtable.header.update('DM', dm.value)
         # finally assign the table data
         for name, array in array2assign.iteritems():
-            newtable.data.field(name)[:] = array
-        subinttable = FITS.HDUList([fh['PRIMARY'], newtable])
+            try:
+                newtable.data.field(name)[:] = array
+            except ValueError:
+                print("FITS error... work in progress", name, array.shape, newtable.data.field(name)[:].shape)
+                 
+        phdu = fh['PRIMARY'].copy()
+        subinttable = FITS.HDUList([phdu, newtable])
         subinttable[1].header.update('EXTNAME', 'SUBINT')
     else:
         subinttable = FITS.HDUList([])
@@ -377,7 +379,6 @@ class Folder(dict):
             self[fold_argnames[Nargs - Ndefaults + i]] = v
             
         # get some defaults from fh (may be overwritten by kwargs)
-        self['dtype'] = fh.dtype
         self['samplerate'] = fh.samplerate #(1./fh['SUBINT'].header['TBIN']*u.Hz).to(u.MHz)
         self['fedge'] = fh.fedge
         self['fedge_at_top'] = fh.fedge_at_top
