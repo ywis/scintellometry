@@ -154,14 +154,16 @@ def reduce(telescope, obsdate, tstart, tend, nchan, ngate, ntbin, ntw_min=10200,
         print("Saving FITS files...")
         # assign the folded data ( [f2] = [nchan, ngate, ntbin]
         #                          want [ntbin, npol, nchan, ngate] 
+
+        # TODO: accomodate lofar data, which concatenates the channels so f2 = len(range(P))*nchan
+        if telescope == 'lofar':
+            f2 = f2[-nchan:]
         nchan, ngate, ntbin = f2.shape
         f2 = f2.transpose(2, 0, 1)
         f2 = f2.reshape(ntbin, np.newaxis, nchan, ngate)
-        subint_table[1].data.field('DATA')[:] = f2
-        print("INFO", subint_table.info(), subint_table['SUBINT'].header['DM'])
-#        print("S", subint_table[0].header)
-#        print("\nSI", subint_table[1].header)
-        #subint_table.verify(option='fix') 
+        std = f2.std(axis=0)
+        subint_table[1].data.field('DATA')[:] = (2**16*f2/std).astype(np.int16)
+        print("INFO", subint_table.info(), subint_table['SUBINT'].header['DM'], subint_table[1].data.field('DATA')[:].max())
         fout = '{0}{1}folded3_{2}+{3:08}.fits'.format(telescope, psr, tstart, dt.sec)
         subint_table.writeto(fout, output_verify='silentfix', clobber=True)
         # to be continued...
