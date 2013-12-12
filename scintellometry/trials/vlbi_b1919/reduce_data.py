@@ -163,10 +163,9 @@ def reduce(telescope, obsdate, tstart, tend, nchan, ngate, ntbin, ntw_min=10200,
         f2 = f2.reshape(ntbin, np.newaxis, nchan, ngate)
         std = f2.std(axis=0)
         subint_table[1].data.field('DATA')[:] = (2**16*f2/std).astype(np.int16)
-        print("INFO", subint_table.info(), subint_table['SUBINT'].header['DM'], subint_table[1].data.field('DATA')[:].max())
-        fout = '{0}{1}folded3_{2}+{3:08}.fits'.format(telescope, psr, tstart, dt.sec)
-        subint_table.writeto(fout, output_verify='silentfix', clobber=True)
-        # to be continued...
+        fout = '{0}{1}folded3_{2}+{3:08}sec.fits'.format(telescope, psr, tstart, dt.sec)
+        # Note: output_verify != 'ignore' resets the cards for some reason
+        subint_table.writeto(fout, output_verify='ignore', clobber=True)
 
 def CL_parser():
     parser = argparse.ArgumentParser(prog='reduce_data.py',
