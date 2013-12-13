@@ -211,7 +211,7 @@ def CL_parser():
 
 
     d_parser = parser.add_argument_group("Dedispersion related parameters.")
-    d_parser.add_argument('--dedisperse', type=str, default=incoherent,
+    d_parser.add_argument('--dedisperse', type=str, default='incoherent',
                         help="One of ['None', 'coherent', 'by-channel', 'incoherent'].")
     d_parser.add_argument('--fref', type=float, default=_fref,
                           help="ref. freq. for dispersion measure")
