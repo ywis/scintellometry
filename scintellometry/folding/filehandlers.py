@@ -279,7 +279,7 @@ class LOFARdata(multifile):
         self.fedge_at_top = False
 
         # update some of the hdu data
-        self['PRIMARY'].header['DATE-OBS'] = self.time0.iso
+        self['PRIMARY'].header['DATE-OBS'] = self.time0.isot
         self[0].header.update('TBIN', (1./samplerate).to('s').value)
 
     def close(self):
@@ -400,7 +400,7 @@ class LOFARdata_Pcombined(multifile):
         self.fedge = freqs[0]
         self.fedge_at_top = False
         # update some of the hdu data
-        self['PRIMARY'].header['DATE-OBS'] = self.time0.iso
+        self['PRIMARY'].header['DATE-OBS'] = self.time0.isot
         self['PRIMARY'].header.update('TBIN', (1./samplerate).to('s').value)
         self['PRIMARY'].header.update('NCHAN', self.nchan)
  

@@ -274,6 +274,8 @@ def fold(fh, comm, samplerate, fedge, fedge_at_top, nchan,
                     t = tsample - dt[k]  # dedispersed times
                 elif dedisperse is None:
                     t = tsample # do nothing
+                else:
+                    t = tsample - dt[k]
 
                 phase = phasepol(t)  # corresponding PSR phases
                 iphase = np.remainder(phase*ngate,
@@ -319,7 +321,7 @@ def fold(fh, comm, samplerate, fedge, fedge_at_top, nchan,
                 array2assign[col.name] = np.ones(freq.size, dtype=np.float32)
                 attrs['format'] = '{0}E'.format(freq.size)
             elif col.name == 'DAT_OFFS':
-                array2assign[col.name] = np.ones(freq.size*npol, dtype=np.float32)
+                array2assign[col.name] = np.zeros(freq.size*npol, dtype=np.float32)
                 attrs['format'] = '{0}E'.format(freq.size*npol)
             elif col.name == 'DAT_SCL':
                 array2assign[col.name] = np.ones(freq.size*npol, dtype=np.float32)
@@ -358,7 +360,7 @@ def fold(fh, comm, samplerate, fedge, fedge_at_top, nchan,
         subinttable[1].header.update('EXTNAME', 'SUBINT')
         subinttable['PRIMARY'].header.update('DATE-OBS', fh.time0.isot)
         subinttable['PRIMARY'].header.update('STT_IMJD', int(fh.time0.mjd))
-        subinttable['PRIMARY'].header.update('STT_SMJD', int(str(fh.time0.mjd - int(fh.time0.mjd))[2:]))
+        subinttable['PRIMARY'].header.update('STT_SMJD', int(str(fh.time0.mjd - int(fh.time0.mjd))[2:])*86400)
     else:
         subinttable = FITS.HDUList([])
   
