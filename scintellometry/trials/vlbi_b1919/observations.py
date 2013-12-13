@@ -76,7 +76,7 @@ class telescope(dict):
         seq_file = (self['seq_filetmplt'].format(fnbase, disk_no[0], node, dt))
         raw_files = [self['raw_filestmplt'].format(fnbase, disk_no[i], node, dt, i)
                      for i in range(3)]
-        return [[seq_file, raw_files]]
+        return [seq_file, raw_files]
 
     def _lofar_file(self, key):
         """
@@ -96,7 +96,7 @@ class telescope(dict):
             file1 = file_fmt.format(fnbase, floc, S=S[0], P=p)
             file2 = file_fmt.format(fnbase, floc, S=S[1], P=p)
             files.append((file1, file2))
-        return files
+        return [files]
 
     def _gmrt_twofiles(self, key):
         """"
@@ -110,7 +110,7 @@ class telescope(dict):
         file1 = file_fmt.format(fnbase, pol, 1)
         file2 = file_fmt.format(fnbase, pol, 2)
         timestamps = file1.split('.Pol')[0] + '.timestamp'
-        return [[timestamps, [file1, file2]]]
+        return [timestamps, [file1, file2]]
         
 
 class observation(dict):

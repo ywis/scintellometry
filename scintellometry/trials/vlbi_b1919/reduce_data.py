@@ -48,7 +48,7 @@ def reduce(telescope, obsdate, tstart, tend, nchan, ngate, ntbin, ntw_min=10200,
         GenericOpen = AROdata
     elif telescope == 'lofar':
         GenericOpen = LOFARdata
-        #GenericOpen = LOFARdata_Pcombined
+        GenericOpen = LOFARdata_Pcombined
     elif telescope == 'gmrt':
         GenericOpen = GMRTdata
 
@@ -56,12 +56,14 @@ def reduce(telescope, obsdate, tstart, tend, nchan, ngate, ntbin, ntw_min=10200,
     icounts = []
     waterfalls = []
     idx = 0 
-    for idx, fname in enumerate(files):
-      with GenericOpen(*fname, comm=comm) as fh:
-    #    with GenericOpen(files, comm=comm) as fh:
+#    for idx, fname in enumerate(files):
+#      with GenericOpen(*fname, comm=comm) as fh:
+    with GenericOpen(*files, comm=comm) as fh:
         # None means data is channelized already, so we get this property
         # directly from the file
-        if nchan is None:
+        if nchan is None or telescope == 'lofar':
+            if comm.rank == 0:
+                print("LOFAR data: setting nchan to %s" % fh.nchan)
             nchan = fh.nchan
         time0 = fh.time0
         phasepol = Obs[telescope][obskey].get_phasepol(time0)
@@ -245,7 +247,7 @@ if __name__ == '__main__':
         # already channelized, determined from filehandle (previously args.nchan = 20)
         args.nchan = None
         args.ngate =  512
-        args.date = '2013-05-05' # Note, dates are made up for now
+        args.date = '2013-07-27' # Note, dates are made up for now
         #args.nt = 180
         args.ntbin = 6
         args.ntw_min = 10200
