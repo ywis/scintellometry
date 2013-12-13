@@ -25,6 +25,11 @@ _lofar_dtypes = {'float':'>f4', 'int8':'>i1'}
 
 class multifile(psrFITS):
 
+    # ARO and GMRT (LOFAR_Pcombined overwrites this)
+    def seek_record_read(self, offset, count):
+        self.seek(offset)
+        return self.record_read(count)
+
     def set_hdu_defaults(self, dictionary):
         for hdu, defs in dictionary.iteritems():
             for card, val in defs.iteritems():
@@ -141,7 +146,7 @@ class AROdata(multifile):
         this is baseband data so need to know number of channels we're making
 
         """
-        return 2*self.recsize // (2*nchan) 
+        return 2*self.recsize // (2*nchan)
 
     def read(self, size):
         assert size == self.recsize
@@ -167,10 +172,6 @@ class AROdata(multifile):
         for i, fh in enumerate(self.fh_raw):
             fh.Seek(np.count_nonzero(self.sequence['raw'][:self.index] == i) *
                     self.recsize)
-
-    def seek_record_read(self, offset, count):
-        self.seek(offset)
-        return self.record_read(count)
 
     def __repr__(self):
         return ("<open multifile raw_voltage_files {} "
@@ -348,10 +349,6 @@ class LOFARdata(multifile):
     def seek(self, offset):
         self.fh1.Seek(offset)
         self.fh2.Seek(offset)
-
-    def seek_record_read(self, offset, count):
-        self.seek(offset)
-        return self.record_read(count)
 
     def __repr__(self):
         return ("<open lofar polarization pair {} and {}>"
@@ -632,9 +629,6 @@ class GMRTdata(multifile):
             fh.Seek(np.count_nonzero(self.indices[:self.index] == i) *
                     self.recsize)
 
-    def seek_record_read(self, offset, count):
-        self.seek(offset)
-        return self.record_read(count)
 
     @property
     def time(self):
