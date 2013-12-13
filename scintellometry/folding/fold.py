@@ -65,8 +65,9 @@ def fold(fh, comm, samplerate, fedge, fedge_at_top, nchan,
     phasepol : callable
         function that returns the pulsar phase for time in seconds relative to
         start of part of the file that is read (i.e., ignoring nhead)
-    dedisperse : None or string
-        None, 'incoherent', 'coherent', 'by-channel'
+    dedisperse : None or string (default: incoherent).
+        None, 'incoherent', 'coherent', 'by-channel'.
+        Note: None really does nothing
     do_waterfall, do_foldspec : bool
         whether to construct waterfall, folded spectrum (default: True)
     verbose : bool or int
@@ -269,8 +270,10 @@ def fold(fh, comm, samplerate, fedge, fedge_at_top, nchan,
             for k in xrange(nchan):
                 if dedisperse == 'coherent':
                     t = tsample  # already dedispersed
-                else:
+                elif dedisperse in ['incoherent', 'by-channel']:
                     t = tsample - dt[k]  # dedispersed times
+                elif dedisperse is None:
+                    t = tsample # do nothing
 
                 phase = phasepol(t)  # corresponding PSR phases
                 iphase = np.remainder(phase*ngate,

@@ -52,14 +52,8 @@ def reduce(telescope, obsdate, tstart, tend, nchan, ngate, ntbin, ntw_min=10200,
     elif telescope == 'gmrt':
         GenericOpen = GMRTdata
 
-    foldspecs = []
-    icounts = []
-    waterfalls = []
-    idx = 0 
-#    for idx, fname in enumerate(files):
-#      with GenericOpen(*fname, comm=comm) as fh:
     with GenericOpen(*files, comm=comm) as fh:
-        # None means data is channelized already, so we get this property
+        # nchan = None means data is channelized already, so we get this property
         # directly from the file
         if nchan is None or telescope == 'lofar':
             if comm.rank == 0:
@@ -98,64 +92,53 @@ def reduce(telescope, obsdate, tstart, tend, nchan, ngate, ntbin, ntw_min=10200,
                         rfi_filter_raw=None, #AARrfi_filter_raw,
                         rfi_filter_power=None)
         myfoldspec, myicount, mywaterfall, subint_table = folder(fh, comm=comm)
-        
-        if do_waterfall:
-            waterfall = np.zeros_like(mywaterfall)
-            comm.Reduce(mywaterfall, waterfall, op=MPI.SUM, root=0)
-            if comm.rank == 0:
-                waterfalls.append(waterfall)
+    # end with
 
-        if do_foldspec:
-            foldspec = np.zeros_like(myfoldspec)
-            icount = np.zeros_like(myicount)
-            comm.Reduce(myfoldspec, foldspec, op=MPI.SUM, root=0)
-            comm.Reduce(myicount, icount, op=MPI.SUM, root=0)
-            if comm.rank == 0:
-                foldspecs.append(foldspec)
-                icounts.append(icount)
-                this_f = normalize_counts(foldspec, icount)
-                fname = ("{0}{1}foldspec_idx{2}_{3}+{4:08}sec.npy")
-                iname = ("{0}{1}icount_idx{2}_{3}+{4:08}sec.npy")
-                np.save(fname.format(telescope, psr, idx, tstart, dt.sec), foldspec)
-                np.save(iname.format(telescope, psr, idx, tstart, dt.sec), icount)
-    # end file loop (mostly for lofar subbands)
+    savepref = "{0}{1}_{2}chan{3}ntbin".format(telescope, psr, nchan, ntbin)  
+    if do_waterfall:
+        waterfall = np.zeros_like(mywaterfall)
+        comm.Reduce(mywaterfall, waterfall, op=MPI.SUM, root=0)
+        if comm.rank == 0:
+            waterfall = normalize_counts(waterfall)
+            np.save("{0}waterfall_{1}+{2:08}sec.npy"
+                    .format(savepref, tstart, dt.sec), waterfall)
 
-    if do_waterfall and  comm.rank == 0:
-            waterfall = normalize_counts(np.concatenate(waterfalls, axis=0))
-            np.save("{0}{1}waterfall_{2}+{3:08}sec.npy"
-                    .format(telescope, psr, tstart, dt.sec), waterfall)
+    if do_foldspec:
+        foldspec = np.zeros_like(myfoldspec)
+        icount = np.zeros_like(myicount)
+        comm.Reduce(myfoldspec, foldspec, op=MPI.SUM, root=0)
+        comm.Reduce(myicount, icount, op=MPI.SUM, root=0)
+        if comm.rank == 0:
+            fname = ("{0}foldspec_{1}+{2:08}sec.npy")
+            iname = ("{0}icount_{1}+{2:08}sec.npy")
+            np.save(fname.format(savepref, tstart, dt.sec), foldspec)
+            np.save(iname.format(savepref, tstart, dt.sec), icount)
 
-    if do_foldspec and comm.rank == 0:
-        foldspec = np.concatenate(foldspecs, axis=0)
-        icount = np.concatenate(icounts, axis=0)
-        np.save("{0}{1}foldspec_{2}+{3:08}sec".format(telescope,psr, tstart, dt.sec), foldspec)
-        np.save("{0}{1}icount_{2}+{3:08}sec".format(telescope, psr, tstart, dt.sec), icount)
+            # get normalized flux in each bin (where any were added)
+            f2 = normalize_counts(foldspec, icount)
+            foldspec1 = f2.sum(axis=2)
+            fluxes = foldspec1.sum(axis=0)
+            foldspec3 = f2.sum(axis=0)
 
-        # get normalized flux in each bin (where any were added)
-        f2 = normalize_counts(foldspec, icount)
-        foldspec1 = f2.sum(axis=2)
-        fluxes = foldspec1.sum(axis=0)
-        foldspec3 = f2.sum(axis=0)
-
-        with open('{0}{1}flux_{2}+{3:08}sec.dat'.format(telescope, psr, tstart, dt.sec), 'w') as f:
-            for i, flux in enumerate(fluxes):
-                f.write('{0:12d} {1:12.9g}\n'.format(i+1, flux))
+            with open('{0}flux_{1}+{2:08}sec.dat'.format(savepref, tstart, dt.sec), 'w') as f:
+                for i, flux in enumerate(fluxes):
+                    f.write('{0:12d} {1:12.9g}\n'.format(i+1, flux))
 
     plots = True
     if plots and comm.rank == 0:
         if do_waterfall:
             w = waterfall.copy()
-            pmap('{0}{1}waterfall_{2}+{3:08}sec.pgm'.format(telescope, psr, tstart, dt.sec),
+            pmap('{0}waterfall_{1}+{2:08}sec.pgm'.format(savepref, tstart, dt.sec),
                  w, 1, verbose=True)
         if do_foldspec:
-            pmap('{0}{1}folded_{2}+{3:08}sec.pgm'.format(telescope, psr, tstart, dt.sec),
+            pmap('{0}folded_{1}+{2:08}sec.pgm'.format(savepref, tstart, dt.sec),
                  foldspec1, 0, verbose)
             # TODO: Note, I (aaron) don't think this works for LOFAR data since nchan=20,
             # but we concatenate several subband files together, so f2.nchan = N_concat * nchan
             # It should work for my "new" LOFAR_Pconcate file class
-            pmap('{0}{1}foldedbin_{2}+{3:08}sec.pgm'.format(telescope, psr, tstart, dt.sec),
+            pmap('{0}foldedbin_{1}+{2:08}sec.pgm'.format(savepref, tstart, dt.sec),
                  f2.transpose(0,2,1).reshape(nchan,-1), 1, verbose)
-            pmap('{0}{1}folded3_{2}+{3:08}sec.pgm'.format(telescope, psr, tstart, dt.sec),
+            pmap('{0}folded3_{1}+{2:08}sec.pgm'.format(savepref, tstart, dt.sec),
                  foldspec3, 0, verbose)
 
     savefits = True
@@ -174,7 +157,7 @@ def reduce(telescope, obsdate, tstart, tend, nchan, ngate, ntbin, ntw_min=10200,
         f2 = f2.reshape(ntbin, np.newaxis, nchan, ngate)
         std = f2.std(axis=0)
         subint_table[1].data.field('DATA')[:] = (2**16*f2/std).astype(np.int16)
-        fout = '{0}{1}folded3_{2}+{3:08}sec.fits'.format(telescope, psr, tstart, dt.sec)
+        fout = '{0}folded3_{1}+{2:08}sec.fits'.format(savepref, tstart, dt.sec)
         # Note: output_verify != 'ignore' resets the cards for some reason
         try:
             subint_table.writeto(fout, output_verify='ignore', clobber=True)
