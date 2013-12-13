@@ -313,24 +313,21 @@ def fold(fh, comm, samplerate, fedge, fedge_at_top, nchan,
             elif col.name == 'OFFS_SUB':
                 array2assign[col.name] = np.arange(ntbin) * tsubint 
             elif col.name == 'DAT_FREQ':
-                if freq.ndim == 1:
-                    array2assign[col.name] = freq.to(u.MHz).value
-                else:
-                    array2assign[col.name] = freq[0,:].to(u.MHz).value
-                attrs['format'] = '{0}D'.format(nchan)
+                array2assign[col.name] = freq.to(u.MHz).value.astype(np.double)
+                attrs['format'] = '{0}D'.format(freq.size)
             elif col.name == 'DAT_WTS':
-                array2assign[col.name] = np.ones(nchan, dtype=np.float32)
-                attrs['format'] = '{0}E'.format(nchan)
+                array2assign[col.name] = np.ones(freq.size, dtype=np.float32)
+                attrs['format'] = '{0}E'.format(freq.size)
             elif col.name == 'DAT_OFFS':
-                array2assign[col.name] = np.ones(nchan*npol, dtype=np.float32)
-                attrs['format'] = '{0}E'.format(nchan*npol)
+                array2assign[col.name] = np.ones(freq.size*npol, dtype=np.float32)
+                attrs['format'] = '{0}E'.format(freq.size*npol)
             elif col.name == 'DAT_SCL':
-                array2assign[col.name] = np.ones(nchan*npol, dtype=np.float32)
-                attrs['format'] = '{0}E'.format(nchan)
+                array2assign[col.name] = np.ones(freq.size*npol, dtype=np.float32)
+                attrs['format'] = '{0}E'.format(freq.size)
             elif col.name == 'DATA':
-                array2assign[col.name] = np.zeros((ntbin, npol, nchan, ngate), dtype='i1')
-                attrs['dim'] = "({},{},{})".format(ngate, nchan, npol) 
-                attrs['format'] = "{0}I".format(ngate*nchan*npol)
+                array2assign[col.name] = np.zeros((ntbin, npol, freq.size, ngate), dtype='i1')
+                attrs['dim'] = "({},{},{})".format(ngate, freq.size, npol) 
+                attrs['format'] = "{0}I".format(ngate*freq.size*npol)
             newcols.append(FITS.Column(**attrs))
         newcoldefs = FITS.ColDefs(newcols)
 
@@ -340,10 +337,12 @@ def fold(fh, comm, samplerate, fedge, fedge_at_top, nchan,
         # owing to the structure of the code (MPI), we need to assign
         # the 'DATA' outside of fold.py 
         newtable.header.update('NPOL', 1)
-        newtable.header.update('NBIN', 1)
+        newtable.header.update('NBIN', ngate)
         newtable.header.update('NBIN_PRD', ngate)
-        newtable.header.update('NCHAN', nchan)
-        chan_bw = np.diff(freq.value).mean()
+        newtable.header.update('NCHAN', freq.size)
+        newtable.header.update('INT_UNIT', 'PHS')
+        newtable.header.update('TBIN', tsubint) 
+        chan_bw = np.abs(np.diff(freq.to(u.MHz).value).mean())
         newtable.header.update('CHAN_BW', chan_bw)
         if dedisperse in ['coherent', 'by-channel', 'incoherent']:
             newtable.header.update('DM', dm.value)
@@ -357,6 +356,9 @@ def fold(fh, comm, samplerate, fedge, fedge_at_top, nchan,
         phdu = fh['PRIMARY'].copy()
         subinttable = FITS.HDUList([phdu, newtable])
         subinttable[1].header.update('EXTNAME', 'SUBINT')
+        subinttable['PRIMARY'].header.update('DATE-OBS', fh.time0.isot)
+        subinttable['PRIMARY'].header.update('STT_IMJD', int(fh.time0.mjd))
+        subinttable['PRIMARY'].header.update('STT_SMJD', int(str(fh.time0.mjd - int(fh.time0.mjd))[2:]))
     else:
         subinttable = FITS.HDUList([])
   

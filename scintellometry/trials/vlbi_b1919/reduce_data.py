@@ -211,8 +211,8 @@ def CL_parser():
 
 
     d_parser = parser.add_argument_group("Dedispersion related parameters.")
-    d_parser.add_argument('--dedisperse', type=str, default=None,
-                        help="One of ['None', 'coherent', 'by-channel'].")
+    d_parser.add_argument('--dedisperse', type=str, default=incoherent,
+                        help="One of ['None', 'coherent', 'by-channel', 'incoherent'].")
     d_parser.add_argument('--fref', type=float, default=_fref,
                           help="ref. freq. for dispersion measure")
 
@@ -236,7 +236,7 @@ if __name__ == '__main__':
         args.ntw_min = 10200
         args.waterfall = False
         args.verbose += 1
-        args.dedisperse = None
+        args.dedisperse = 'incoherent'
         args.rfi_filter_raw = None
 
     elif args.reduction_defaults == 'aro':
