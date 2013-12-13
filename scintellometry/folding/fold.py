@@ -341,7 +341,7 @@ def fold(fh, comm, samplerate, fedge, fedge_at_top, nchan,
         newtable.header.update('NBIN_PRD', ngate)
         newtable.header.update('NCHAN', freq.size)
         newtable.header.update('INT_UNIT', 'PHS')
-        newtable.header.update('TBIN', tsubint) 
+        newtable.header.update('TBIN', tsubint.to(u.s).value) 
         chan_bw = np.abs(np.diff(freq.to(u.MHz).value).mean())
         newtable.header.update('CHAN_BW', chan_bw)
         if dedisperse in ['coherent', 'by-channel', 'incoherent']:
