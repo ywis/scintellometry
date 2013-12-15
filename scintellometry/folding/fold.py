@@ -103,7 +103,7 @@ def fold(fh, comm, samplerate, fedge, fedge_at_top, nchan,
                   .format(nskip, nskip*fh.recsize))
 
     # LOFAR data is already channelized
-    if hasattr(fh, 'fwidth'):
+    if fh.telescope == 'lofar':
        dtsample = (1./fh.fwidth).to(u.s)
        dt1 = dtsample
     else:
@@ -139,6 +139,11 @@ def fold(fh, comm, samplerate, fedge, fedge_at_top, nchan,
             freq = fedge - thisfftfreq(nchan*2, dt1.value) * u.Hz
         else:
             freq = fedge + thisfftfreq(nchan*2, dt1.value) * u.Hz
+        # sort lowest to highest freq
+        # freq.sort()
+        # [::2] sets frequency channels to numerical recipes ordering
+        # or, rfft has an unusual ordering
+        freq = freq[::2]
     elif fh.telescope == 'gmrt':
         freq = fftshift(fftfreq(nchan, 2.*dt1.value)) * u.Hz
         if fedge_at_top:
@@ -147,15 +152,8 @@ def fold(fh, comm, samplerate, fedge, fedge_at_top, nchan,
             freq = fedge + (freq-freq[0])
 
   
-    if fh.telescope == 'aro':
-        # ARO data
-        # [::2] sets frequency channels to numerical recipes ordering
-        # or, rfft has an unusual ordering
-        dt = (dispersion_delay_constant * dm *
-                 (1./freq[::2]**2 - 1./fref**2)).to(u.s).value
-    else:
-        dt = (dispersion_delay_constant * dm *
-                 (1./freq**2 - 1./fref**2)).to(u.s).value
+    dt = (dispersion_delay_constant * dm *
+             (1./freq**2 - 1./fref**2)).to(u.s).value
 
     if dedisperse in ['coherent', 'by-channel']:
         # pre-calculate required turns due to dispersion
@@ -240,6 +238,7 @@ def fold(fh, comm, samplerate, fedge, fedge_at_top, nchan,
             # re-order to Num.Rec. format: Re[0], Re[n/2], Re[1], ....
             power = np.hstack((chan2[:,:1]+chan2[:,-1:],
                                chan2[:,1:-1].reshape(-1,nchan-1,2).sum(-1)))
+
         elif fh.telescope == 'gmrt':
             chan = vals.reshape(-1, nchan)
             power = chan.real**2+chan.imag**2
@@ -315,6 +314,7 @@ def fold(fh, comm, samplerate, fedge, fedge_at_top, nchan,
             elif col.name == 'OFFS_SUB':
                 array2assign[col.name] = np.arange(ntbin) * tsubint 
             elif col.name == 'DAT_FREQ':
+                # TODO: sort from lowest freq. to highest ('DATA') needs sorting as well
                 array2assign[col.name] = freq.to(u.MHz).value.astype(np.double)
                 attrs['format'] = '{0}D'.format(freq.size)
             elif col.name == 'DAT_WTS':
