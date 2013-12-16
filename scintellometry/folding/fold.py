@@ -157,7 +157,7 @@ def fold(fh, comm, samplerate, fedge, fedge_at_top, nchan,
 
     if dedisperse in ['coherent', 'by-channel']:
         # pre-calculate required turns due to dispersion
-        if hasattr(fh, 'freqs'):
+        if fh.telescope == 'lofar':
             fcoh = (freq[np.newaxis,:] +
                     fftfreq(ntint, dtsample.value)[:,np.newaxis] * u.Hz)
         else:
@@ -206,7 +206,7 @@ def fold(fh, comm, samplerate, fedge, fedge_at_top, nchan,
             print("Read {} items".format(raw.size), end="")
 
         if rfi_filter_raw is not None:
-            raw = rfi_filter_raw(raw)
+            raw = rfi_filter_raw(raw, nchan)
             if verbose >= 2:
                 print("... raw RFI", end="")
 

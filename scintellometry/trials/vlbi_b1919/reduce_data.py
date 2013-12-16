@@ -18,9 +18,9 @@ MAX_RMS = 4.2
 _fref = 150. * u.MHz  # ref. freq. for dispersion measure
 
 
-def rfi_filter_raw(raw):
+def rfi_filter_raw(raw, nchan):
     # note this should accomodate all data (including's lofar raw = complex)
-    rawbins = raw.reshape(-1, raw.size)  # note, this is view!
+    rawbins = raw.reshape(-1, 2**11*nchan)  # note, this is view!
     rawbins *= (rawbins.std(-1, keepdims=True) < MAX_RMS)
     return raw
 
@@ -57,7 +57,8 @@ def reduce(telescope, obsdate, tstart, tend, nchan, ngate, ntbin, ntw_min=10200,
         # directly from the file
         if nchan is None or telescope == 'lofar':
             if comm.rank == 0:
-                print("LOFAR data: setting nchan to %s" % fh.nchan)
+                print("LOFAR data already channelized: overriding nchan to %s..." % fh.nchan, end="")
+                print("\n\t as configured in observations.conf")
             nchan = fh.nchan
         time0 = fh.time0
         phasepol = Obs[telescope][obskey].get_phasepol(time0)
@@ -89,7 +90,7 @@ def reduce(telescope, obsdate, tstart, tend, nchan, ngate, ntbin, ntw_min=10200,
                         phasepol=phasepol,
                         dedisperse=dedisperse, do_waterfall=do_waterfall,
                         do_foldspec=do_foldspec, verbose=verbose, progress_interval=1,
-                        rfi_filter_raw=None, #AARrfi_filter_raw,
+                        rfi_filter_raw=rfi_filter_raw,
                         rfi_filter_power=None)
         myfoldspec, myicount, mywaterfall, subint_table = folder(fh, comm=comm)
     # end with
@@ -177,7 +178,7 @@ def CL_parser():
 
     d_parser = parser.add_argument_group("Data-related parameters \nThey specify "
                    "which observation run to process (consistent with [telescope], [[date]] entries "
-                   "\nin observations.conf), at the start and finish timestamps.")
+                   "\nin observations.conf), and the start and finish timestamps.")
     d_parser.add_argument('-t','--telescope', type=str, default='aro',
                         help="The data to reduce. One of ['aro', 'lofar', 'gmrt']." ) 
     d_parser.add_argument('-d','--date', type=str, default='2013-07-25T18:14:20',
@@ -189,6 +190,8 @@ def CL_parser():
     d_parser.add_argument('-t1', '--endtime', type=str, default='2013-07-25T22:25:19.767',
                           help="Timestamp within the observation run to end processing. "
                           "(replaces the 'nt' argument)")
+    d_parser.add_argument('--rfi_filter_raw', action='store_true',
+                          help="Apply the 'rfi_filter_rwa' routine to the raw data.") 
     
 
     f_parser = parser.add_argument_group("folding related parameters")
@@ -212,7 +215,8 @@ def CL_parser():
 
     d_parser = parser.add_argument_group("Dedispersion related parameters.")
     d_parser.add_argument('--dedisperse', type=str, default='incoherent',
-                        help="One of ['None', 'coherent', 'by-channel', 'incoherent'].")
+                        help="One of ['None', 'coherent', 'by-channel', 'incoherent']."
+                             "\nNote: None really does nothing.")
     d_parser.add_argument('--fref', type=float, default=_fref,
                           help="ref. freq. for dispersion measure")
 
@@ -224,14 +228,18 @@ def CL_parser():
 if __name__ == '__main__':
     args = CL_parser()
     args.verbose = 0 if args.verbose is None else sum(args.verbose)
-    args.rfi_filter_raw = rfi_filter_raw
+
+    if args.rfi_filter_raw == True:
+        args.rfi_filter_raw = rfi_filter_raw
+    else:
+        args.rfi_filter_raw = None
+
     if args.reduction_defaults == 'lofar':
         args.telescope = 'lofar'
         # already channelized, determined from filehandle (previously args.nchan = 20)
         args.nchan = None
         args.ngate =  512
-        args.date = '2013-07-27' # Note, dates are made up for now
-        #args.nt = 180
+        args.date = '2013-07-25' # Note, dates are made up for now
         args.ntbin = 6
         args.ntw_min = 10200
         args.waterfall = False
@@ -241,21 +249,19 @@ if __name__ == '__main__':
 
     elif args.reduction_defaults == 'aro':
         # do nothing, args are already set to aro.py defaults
-        pass
+        args.reduction_defaults = rfi_filter_raw
 
     elif args.reduction_defaults == 'gmrt':
         # to-do...
         args.telescope = 'gmrt'
-        args.date = '2013-07-26' # Note, gmrt dates made up for now
+        args.date = '2013-07-25' # Note, gmrt dates made up for now
         args.nchan = 512
         args.ngate = 512
-        #args.nt = 500 # 5 min/16.667 MHz=2400*(recsize / 2)
         args.ntbin = 5 
         args.ntw_min = 170 # 170 /(100.*u.MHz/6.) * 512 = 0.0052224 s = 256 bins/pulse
         args.rfi_filter_raw = None
         args.waterfall = True
         args.dedisperse = 'incoherent'
-
     reduce(
         args.telescope, args.date, tstart=args.starttime, tend=args.endtime,
         nchan=args.nchan, ngate=args.ngate, ntbin=args.ntbin, ntw_min=args.ntw_min,
