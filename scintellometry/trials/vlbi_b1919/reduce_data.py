@@ -141,7 +141,7 @@ def reduce(telescope, obsdate, tstart, tend, nchan, ngate, ntbin, ntw_min=10200,
             pmap('{0}folded3_{1}+{2:08}sec.pgm'.format(savepref, tstart, dt.sec),
                  foldspec3, 0, verbose)
 
-    savefits = True
+    savefits = False
     if savefits and comm.rank == 0:
         print("Saving FITS files...")
         # assign the folded data ( [f2] = [nchan, ngate, ntbin]
