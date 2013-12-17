@@ -1,31 +1,34 @@
 """
 load the observation data, which is stored as a ConfigObj object.
 
-We do some parsing of the data in routine 'obsdata' to 
+We do some parsing of the data in routine 'obsdata' to
 get the data in a useful format
 
 """
-from configobj import ConfigObj
 from numpy.polynomial import Polynomial
 from numpy import argmin
 import re
 from astropy import units as u
-
 from astropy.coordinates import ICRS
 from astropy.time import Time
 
+from astropy.extern.configobj_py2.configobj import ConfigObj
+from astropy.utils.data import get_pkg_data_filename
+
+
 def obsdata(conf='observations.conf'):
-    """ load the observation data """
-    C = ConfigObj(conf)
+    """Load the observation data"""
+    C = ConfigObj(get_pkg_data_filename(conf))
 
     # map things from ConfigObj to dictionary of useful objects
     obs = {}
     for key, val in C.iteritems():
-        if key == 'psrs': 
+        if key == 'psrs':
             obs[key] = parse_psrs(val)
         else:
             obs[key] = parse_tel(key,val)
     return obs
+
 
 class telescope(dict):
     def __init__(self, name):
@@ -36,20 +39,21 @@ class telescope(dict):
     def nearest_observation(self, t):
         """
         return key of nearest observation to (utc) time 't'.
-        A warning is raised if the observation > 1s away 
+        A warning is raised if the observation > 1s away
 
         """
         if isinstance(t, str):
             t = Time(t, scale='utc')
-        
+
         dts = []
         dates = [self[d]['date'] for d in self['observations']]
         for date in dates:
-            dts.append(abs( (t - date).sec ))
+            dts.append(abs((t - date).sec))
         dtmin = argmin(dts)
-        key = self['observations'][dtmin] 
+        key = self['observations'][dtmin]
         if dts[dtmin] > 1.:
-            tmplt = ("Warning, nearest observation {0} is more than 1 second away from request time {1}")
+            tmplt = ("Warning, nearest observation {0} is more than 1 second "
+                     "away from request time {1}")
             raise Warning(tmplt.format(key, str(t)))
         return key
 
@@ -74,7 +78,8 @@ class telescope(dict):
         node = obs.get('node', self.get('node', None))
         dt = key
         seq_file = (self['seq_filetmplt'].format(fnbase, disk_no[0], node, dt))
-        raw_files = [self['raw_filestmplt'].format(fnbase, disk_no[i], node, dt, i)
+        raw_files = [self['raw_filestmplt'].format(fnbase, disk_no[i],
+                                                   node, dt, i)
                      for i in range(3)]
         return [seq_file, raw_files]
 
@@ -83,7 +88,7 @@ class telescope(dict):
         return a list of 2-tuples for LOFAR observations 'key'.
         Each tuple is the S-pair of files, and the list is over the
         P channels
-        
+
         """
         obs = self[key]
         fnbase = obs.get('fnbase', self.get('fnbase', None))
@@ -111,11 +116,11 @@ class telescope(dict):
         file2 = file_fmt.format(fnbase, pol, 2)
         timestamps = file1.split('.Pol')[0] + '.timestamp'
         return [timestamps, [file1, file2]]
-        
+
 
 class observation(dict):
     def __init__(self, date, val):
-        self['date'] = date 
+        self['date'] = date
         for k, v in val.iteritems():
             if k == 'ppol' and v.startswith('Polynomial'):
                 self[k] = eval(v)
@@ -137,7 +142,6 @@ class observation(dict):
         elif not isinstance(phasepol, Polynomial):
             subs = [self['src'], self['date']]
             print("Calculating {0} polyco at {1}".format(*subs))
-            from astropy.utils.data import get_pkg_data_filename
             from pulsar.predictor import Polyco
 
             polyco_file = get_pkg_data_filename(phasepol)
@@ -145,6 +149,7 @@ class observation(dict):
             phasepol = polyco.phasepol(time0, rphase='fraction', t0=time0,
                                        time_unit=u.second, convert=True)
         return phasepol
+
 
 def parse_tel(telname, vals):
     tel = telescope(telname)
@@ -163,6 +168,7 @@ def parse_tel(telname, vals):
             tel.update({key: val})
     return tel
 
+
 def parse_psrs(psrs):
     for name, vals in psrs.iteritems():
         if 'coords' not in vals:
@@ -170,7 +176,8 @@ def parse_psrs(psrs):
             match = re.search("\d{4}[+-]\d+", name)
             if match is not None:
                 crds = match.group()
-                # set *very* rough position (assumes name format [BJ]HHMM[+-]DD*)
+                # set *very* rough position (assumes name format
+                # [BJ]HHMM[+-]DD*)
                 ra = '{0}:{1}'.format(crds[0:2], crds[2:4])
                 dec = '{0}:{1}'.format(crds[5:7], crds[7:]).strip(':')
                 vals['coords'] = ICRS(coordstr='{0}, {1}'.format(ra,dec),
@@ -189,6 +196,7 @@ def parse_psrs(psrs):
         if 'dm' in vals:
             vals['dm'] = eval(vals['dm'])
     return psrs
-        
+
+
 if __name__ == '__main__':
     obsdata()

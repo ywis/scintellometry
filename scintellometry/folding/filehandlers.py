@@ -14,14 +14,13 @@ from h5py import File as HDF5File
 from mpi4py import MPI
 from psrfits_tools import psrFITS
 
-from fromfile import fromfile
-
 # size in bytes of records read from file (simple for ARO: 1 byte/sample)
 # double since we need to get ntint samples after FFT
 _bytes_per_sample = {np.int8: 2, '4bit': 1}
 
 # hdf5 dtype conversion
 _lofar_dtypes = {'float':'>f4', 'int8':'>i1'}
+
 
 class multifile(psrFITS):
 
@@ -41,15 +40,15 @@ class multifile(psrFITS):
     def __enter__(self):
         return self
 
-#    ____  ____   ___  
-#   /    ||    \ /   \ 
+
+#    ____  ____   ___
+#   /    ||    \ /   \
 #  |  o  ||  D  )     |
 #  |     ||    /|  O  |
 #  |  _  ||    \|     |
 #  |  |  ||  .  \     |
-#  |__|__||__|\_|\___/ 
-#      
-
+#  |__|__||__|\_|\___/
+#
 class AROdata(multifile):
     def __init__(self, sequence_file, raw_voltage_files, setsize=2**25,
                  dtype='4bit', samplerate=200.*u.MHz, comm=None):
@@ -88,7 +87,7 @@ class AROdata(multifile):
         self.index = 0
         self.seq0 = self.sequence['seq'][0]
 
-        # defaults expected by fold.py 
+        # defaults expected by fold.py
         self.dtype = dtype
         self.itemsize = _bytes_per_sample.get(dtype, None)
         if self.itemsize is None:
@@ -124,7 +123,7 @@ class AROdata(multifile):
             time0 = Time(time0, scale='utc')
 
         dt = (Time(date, scale='utc')-time0)
-        nskip = int(round( (dt/(self.recsize*2 / self.samplerate))
+        nskip = int(round((dt/(self.recsize*2 / self.samplerate))
                     .to(u.dimensionless_unscaled)))
         return nskip
 
@@ -137,7 +136,8 @@ class AROdata(multifile):
             t0 = Time(t0, scale='utc')
         if isinstance(t1, str):
             t1 = Time(t1, scale='utc')
-        nt = ((t1-t0)*self.fedge/(2*self.setsize)).to(u.dimensionless_unscaled).value
+        nt = ((t1-t0)*self.fedge /
+              (2*self.setsize)).to(u.dimensionless_unscaled).value
         return np.ceil(nt).astype(int)
 
     def ntint(self, nchan):
@@ -165,7 +165,7 @@ class AROdata(multifile):
 
     def record_read(self, count):
         return fromfile(self, self.dtype, count*self.itemsize)
-        
+
     def seek(self, offset):
         assert offset % self.recsize == 0
         self.index = offset // self.recsize
@@ -184,7 +184,8 @@ _ARO_defs['PRIMARY'] = {'TELESCOP':'Algonquin',
                         'OBS_MODE':'SEARCH',
                         'ANT_X':0, 'ANT_Y':0, 'ANT_Z':0, 'NRCVR':1,
                         'FD_HAND':1, 'FD_SANG':0, 'FD_XYPH':0,
-                        'BE_PHASE':0, 'BE_DCC':0, 'BE_DELAY':0,'TRK_MODE':'TRACK',
+                        'BE_PHASE':0, 'BE_DCC':0, 'BE_DELAY':0,
+                        'TRK_MODE':'TRACK',
                         'TCYCLE':0, 'OBSFREQ':300, 'OBSBW':100,
                         'OBSNCHAN':20, 'CHAN_DM':0,
                         'EQUINOX':2000.0, 'BMAJ':1, 'BMIN':1, 'BPA':0,
@@ -192,35 +193,37 @@ _ARO_defs['PRIMARY'] = {'TELESCOP':'Algonquin',
                         'CAL_FREQ':0, 'CAL_DCYC':0, 'CAL_PHS':0, 'CAL_NPHS':0,
                         'STT_IMJD':54000, 'STT_SMJD':0, 'STT_OFFS':0}
 samplerate = 200. * u.MHz
-_ARO_defs['SUBINT']  = {'INT_TYPE': 'TIME',
-                        'SCALE': 'FluxDen',
-                        'POL_TYPE': 'AABB',
-                        'NPOL':1,
-                        'TBIN':(1./samplerate).to('s').value,
-                        'NBIN':1, 'NBIN_PRD':1,
-                        'PHS_OFFS':0,
-                        'NBITS':1,
-                        'ZERO_OFF':0, 'SIGNINT':0,
-                        'NSUBOFFS':0,
-                        'NCHAN':1,
-                        'CHAN_BW':1,
-                        'DM':0, 'RM':0, 'NCHNOFFS':0,
-                        'NSBLK':1}
-#   _       ___   _____   ____  ____  
-#  | |     /   \ |     | /    ||    \ 
+_ARO_defs['SUBINT'] = {'INT_TYPE': 'TIME',
+                       'SCALE': 'FluxDen',
+                       'POL_TYPE': 'AABB',
+                       'NPOL':1,
+                       'TBIN':(1./samplerate).to('s').value,
+                       'NBIN':1, 'NBIN_PRD':1,
+                       'PHS_OFFS':0,
+                       'NBITS':1,
+                       'ZERO_OFF':0, 'SIGNINT':0,
+                       'NSUBOFFS':0,
+                       'NCHAN':1,
+                       'CHAN_BW':1,
+                       'DM':0, 'RM':0, 'NCHNOFFS':0,
+                       'NSBLK':1}
+
+
+#   _       ___   _____   ____  ____
+#  | |     /   \ |     | /    ||    \
 #  | |    |     ||   __||  o  ||  D  )
-#  | |___ |  O  ||  |_  |     ||    / 
-#  |     ||     ||   _] |  _  ||    \ 
+#  | |___ |  O  ||  |_  |     ||    /
+#  |     ||     ||   _] |  _  ||    \
 #  |     ||     ||  |   |  |  ||  .  \
 #  |_____| \___/ |__|   |__|__||__|\_|
-#                                     
+#
 class LOFARdata(multifile):
     def __init__(self, fname1, fname2, comm=None, setsize=2**16):
         """
-        Initialize a lofar observation. We track/join the two polarizations file,
+        Initialize a lofar observation, tracking/joining the two polarizations.
         We also parse the corresponding HDF5 files to initialize:
         nchan, samplerate, fwidth
-          
+
         """
         self.telescope = 'lofar'
         super(LOFARdata, self).__init__(hdus=['SUBINT'])
@@ -233,36 +236,36 @@ class LOFARdata(multifile):
         else:
             self.comm = comm
         self.fh1 = MPI.File.Open(self.comm, fname1, amode=MPI.MODE_RDONLY)
-        self.fh2 = MPI.File.Open(self.comm, fname2, amode=MPI.MODE_RDONLY) 
+        self.fh2 = MPI.File.Open(self.comm, fname2, amode=MPI.MODE_RDONLY)
         # read the HDF5 file and get useful data
         h0 = HDF5File(fname1.replace('.raw', '.h5'), 'r')
         saps = sorted([i for i in h0.keys() if 'SUB_ARRAY_POINTING' in i])
         s0 = h0[saps[0]]
         time0 = Time(s0.attrs['EXPTIME_START_UTC'].replace('Z',''),
-                      scale='utc')
+                     scale='utc')
 
         beams = sorted([i for i in s0.keys() if 'BEAM' in i])
         b0 = s0[beams[0]]
         freqs = (b0['COORDINATES']['COORDINATE_1']
-                       .attrs['AXIS_VALUES_WORLD'] * u.Hz).to(u.MHz)
+                 .attrs['AXIS_VALUES_WORLD'] * u.Hz).to(u.MHz)
         fbottom = freqs[0]
 
         stokes = sorted([i for i in b0.keys()
-                           if 'STOKES' in i and 'i2f' not in i])
+                         if 'STOKES' in i and 'i2f' not in i])
         st0 = b0[stokes[0]]
         dtype = st0.attrs['DATATYPE']
- 
-        nchan = len(freqs) # = st0.attrs['NOF_SUBBANDS']
+
+        nchan = len(freqs)  # = st0.attrs['NOF_SUBBANDS']
 
         # can also get from np.diff(freqs.diff).mean()
-        fwidth = (b0.attrs['SUBBAND_WIDTH'] * 
-                      u.__dict__[b0.attrs['CHANNEL_WIDTH_UNIT']]).to(u.MHz)
+        fwidth = (b0.attrs['SUBBAND_WIDTH'] *
+                  u.__dict__[b0.attrs['CHANNEL_WIDTH_UNIT']]).to(u.MHz)
 
-        samplerate = (b0.attrs['SAMPLING_RATE'] * 
-                          u.__dict__[b0.attrs['SAMPLING_RATE_UNIT']]).to(u.MHz)
+        samplerate = (b0.attrs['SAMPLING_RATE'] *
+                      u.__dict__[b0.attrs['SAMPLING_RATE_UNIT']]).to(u.MHz)
         h0.close()
 
-        # defaults expected by fold.py 
+        # defaults expected by fold.py
         self.time0 = time0
         self.dtype = _lofar_dtypes[dtype]
         self.itemsize = _bytes_per_sample.get(self.dtype, None)
@@ -271,7 +274,7 @@ class LOFARdata(multifile):
 
         self.samplerate = samplerate
         self.nchan = nchan
-        self.fwidth = fwidth # = samplerate = np.diff(freqs).mean() 
+        self.fwidth = fwidth  # = samplerate = np.diff(freqs).mean()
         self.setsize = setsize
         self.recsize = 4 * nchan * setsize
         self.freqs = freqs
@@ -302,7 +305,8 @@ class LOFARdata(multifile):
             time0 = Time(time0, scale='utc')
 
         dt = (Time(date, scale='utc')-time0)
-        nskip = int(round( (dt/(self.ntint(self.nchan) / self.fwidth)).to(u.dimensionless_unscaled)))
+        nskip = int(round((dt / (self.ntint(self.nchan) / self.fwidth))
+                          .to(u.dimensionless_unscaled)))
         return nskip
 
     def ntimebins(self, t0, t1):
@@ -314,13 +318,14 @@ class LOFARdata(multifile):
             t0 = Time(t0, scale='utc')
         if isinstance(t1, str):
             t1 = Time(t1, scale='utc')
-        nt = ((t1-t0)*self.fwidth/(self.setsize)).to(u.dimensionless_unscaled).value
+        nt = ((t1-t0)*self.fwidth /
+              (self.setsize)).to(u.dimensionless_unscaled).value
         return np.ceil(nt).astype(int)
 
     def ntint(self, nchan):
         """
         number of samples in an integration
-        Lofar data is already channelized so we assert 
+        Lofar data is already channelized so we assert
         nchan is the same
         """
         assert(nchan == self.nchan)
@@ -336,14 +341,15 @@ class LOFARdata(multifile):
         z2 = np.zeros(size, dtype='i1')
         self.fh2.Iread([z2, MPI.BYTE])
         return z1, z2
- 
+
     def record_read(self, count):
         """
         read 'count' records of data,
         returned as a complex number
-        """ 
-        raw = [np.fromstring(r, dtype=self.dtype, count=count).reshape(-1, self.nchan)
-                          for r in self.read(count * self.itemsize)]
+        """
+        raw = [np.fromstring(r, dtype=self.dtype,
+                             count=count).reshape(-1, self.nchan)
+               for r in self.read(count * self.itemsize)]
         return raw[0] + 1j*raw[1]
 
     def seek(self, offset):
@@ -352,11 +358,13 @@ class LOFARdata(multifile):
 
     def __repr__(self):
         return ("<open lofar polarization pair {} and {}>"
-                .format(os.path.basename(self.fname1), os.path.basename(self.fname2)))
+                .format(os.path.basename(self.fname1),
+                        os.path.basename(self.fname2)))
+
 
 class LOFARdata_Pcombined(multifile):
     """
-    convenience class to combine multiple subbands, making them act 
+    convenience class to combine multiple subbands, making them act
     as a single file.
 
     """
@@ -379,7 +387,8 @@ class LOFARdata_Pcombined(multifile):
             self.fh_subbands.append(LOFARdata(*filetuple, comm=self.comm))
 
         # make sure basic properties of the files are the same
-        for prop in ['dtype', 'setsize', 'time0', 'samplerate', 'fwidth', 'nchan']:
+        for prop in ['dtype', 'setsize', 'time0', 'samplerate',
+                     'fwidth', 'nchan']:
             props = [fh.__dict__[prop] for fh in self.fh_subbands]
             if prop == 'time0':
                 props = [p.isot for p in props]
@@ -387,12 +396,13 @@ class LOFARdata_Pcombined(multifile):
             self.__setattr__(prop, self.fh_subbands[0].__dict__[prop])
 
         self.recsize = sum([fh.recsize for fh in self.fh_subbands])
- 
+
         self.itemsize = _bytes_per_sample.get(self.dtype, None)
         if self.itemsize is None:
             self.itemsize = np.dtype(self.dtype).itemsize
 
-        freqs = np.concatenate([fh.freqs.to(u.MHz).value for fh in self.fh_subbands])*u.MHz
+        freqs = np.concatenate([fh.freqs.to(u.MHz).value
+                                for fh in self.fh_subbands])*u.MHz
         self.freqs = freqs
         self.nchans = [fh.nchan for fh in self.fh_subbands]
         self.nchan = freqs.value.size
@@ -403,7 +413,7 @@ class LOFARdata_Pcombined(multifile):
         self['PRIMARY'].header['DATE-OBS'] = self.time0.isot
         self['PRIMARY'].header.update('TBIN', (1./samplerate).to('s').value)
         self['PRIMARY'].header.update('NCHAN', self.nchan)
- 
+
     def close(self):
         for fh in self.fh_subbands:
             fh.close()
@@ -424,7 +434,8 @@ class LOFARdata_Pcombined(multifile):
             time0 = Time(time0, scale='utc')
 
         dt = (Time(date, scale='utc')-time0)
-        nskip = int(round( (dt/(self.ntint(None) / self.fwidth)).to(u.dimensionless_unscaled)))
+        nskip = int(round((dt/(self.ntint(None) / self.fwidth))
+                          .to(u.dimensionless_unscaled)))
         return nskip
 
     def ntimebins(self, t0, t1):
@@ -436,13 +447,14 @@ class LOFARdata_Pcombined(multifile):
             t0 = Time(t0, scale='utc')
         if isinstance(t1, str):
             t1 = Time(t1, scale='utc')
-        nt = ((t1-t0)*self.fwidth/(self.setsize)).to(u.dimensionless_unscaled).value
+        nt = ((t1-t0) * self.fwidth /
+              (self.setsize)).to(u.dimensionless_unscaled).value
         return np.ceil(nt).astype(int)
 
     def ntint(self, *args):
         """
         number of samples in an integration
-        Lofar data is already channelized so we assert 
+        Lofar data is already channelized so we assert
         nchan is the same
         """
         # LOFAR is already channelized, we accept args for generalization
@@ -453,10 +465,11 @@ class LOFARdata_Pcombined(multifile):
         z1s = []
         z2s = []
         for fh in self.fh_subbands:
-            frac_size = (size*fh.nchan) // self.nchan # self.nchan = \sum fh(nchan)
+            frac_size = (size*fh.nchan) // self.nchan
+            # self.nchan = \sum fh(nchan)
             if (size * fh.nchan) % self.nchan != 0:
                 raise Warning('Read error in (combined) Lofar record_read')
-            z1, z2 = fh.read(frac_size) 
+            z1, z2 = fh.read(frac_size)
             z1s.append(z1)
             z2s.append(z2)
         return np.concatenate(z1s), np.concatenate(z2s)
@@ -464,12 +477,13 @@ class LOFARdata_Pcombined(multifile):
     def record_read(self, size):
         recs = []
         for fh in self.fh_subbands:
-            frac_size = (size*fh.nchan) // self.nchan # self.nchan = \sum fh(nchan)
+            frac_size = (size*fh.nchan) // self.nchan
+            # self.nchan = \sum fh(nchan)
             if (size * fh.nchan) % self.nchan != 0:
                 raise Warning('Read error in (combined) Lofar record_read')
             recs.append(fh.record_read(frac_size))
         return np.hstack(recs)
- 
+
     def seek(self, offset):
         for fh in self.fh_subbands:
             frac_offset = (offset*fh.nchan) // self.nchan
@@ -489,7 +503,8 @@ class LOFARdata_Pcombined(multifile):
                 raise Warning('Read error in (combined) Lofar seek')
             fh.seek(frac_offset)
 
-            frac_size = (size*fh.nchan) // self.nchan # self.nchan = \sum fh(nchan)
+            frac_size = (size*fh.nchan) // self.nchan
+            # self.nchan = \sum fh(nchan)
             if (size * fh.nchan) % self.nchan != 0:
                 raise Warning('Read error in (combined) Lofar record_read')
             recs.append(fh.record_read(frac_size))
@@ -497,47 +512,50 @@ class LOFARdata_Pcombined(multifile):
 
     def __repr__(self):
         return ("<open (concatenated) lofar polarization pair from {} to {}>"
-                .format(os.path.basename(self.fh_subbands[0].fname1), 
+                .format(os.path.basename(self.fh_subbands[0].fname1),
                         os.path.basename(self.fh_subbands[-1].fname2)))
- 
+
 # LOFAR defaults for psrfits HDUs
 _LOFAR_defs = {}
 _LOFAR_defs['PRIMARY'] = {'TELESCOP':'LOFAR',
-                        'IBEAM':1, 'FD_POLN':'LIN',
-                        'OBS_MODE':'SEARCH',
-                        'ANT_X':0, 'ANT_Y':0, 'ANT_Z':0, 'NRCVR':1,
-                        'FD_HAND':1, 'FD_SANG':0, 'FD_XYPH':0,
-                        'BE_PHASE':0, 'BE_DCC':0, 'BE_DELAY':0, 'TRK_MODE':'TRACK',
-                        'TCYCLE':0, 'OBSFREQ':300, 'OBSBW':100,
-                        'OBSNCHAN':20, 'CHAN_DM':0,
-                        'EQUINOX':2000.0, 'BMAJ':1, 'BMIN':1, 'BPA':0,
-                        'SCANLEN':1, 'FA_REQ':0,
-                        'CAL_FREQ':0, 'CAL_DCYC':0, 'CAL_PHS':0, 'CAL_NPHS':0,
-                        'STT_IMJD':54000, 'STT_SMJD':0, 'STT_OFFS':0}
+                          'IBEAM':1, 'FD_POLN':'LIN',
+                          'OBS_MODE':'SEARCH',
+                          'ANT_X':0, 'ANT_Y':0, 'ANT_Z':0, 'NRCVR':1,
+                          'FD_HAND':1, 'FD_SANG':0, 'FD_XYPH':0,
+                          'BE_PHASE':0, 'BE_DCC':0, 'BE_DELAY':0,
+                          'TRK_MODE':'TRACK',
+                          'TCYCLE':0, 'OBSFREQ':300, 'OBSBW':100,
+                          'OBSNCHAN':20, 'CHAN_DM':0,
+                          'EQUINOX':2000.0, 'BMAJ':1, 'BMIN':1, 'BPA':0,
+                          'SCANLEN':1, 'FA_REQ':0,
+                          'CAL_FREQ':0, 'CAL_DCYC':0,
+                          'CAL_PHS':0, 'CAL_NPHS':0,
+                          'STT_IMJD':54000, 'STT_SMJD':0, 'STT_OFFS':0}
 samplerate = 200. * u.MHz
-_LOFAR_defs['SUBINT']  = {'INT_TYPE': 'TIME',
-                        'SCALE': 'FluxDen',
-                        'POL_TYPE': 'AABB',
-                        'NPOL':1,
-                        'TBIN':(1./samplerate).to('s').value,
-                        'NBIN':1, 'NBIN_PRD':1,
-                        'PHS_OFFS':0,
-                        'NBITS':1,
-                        'ZERO_OFF':0, 'SIGNINT':0,
-                        'NSUBOFFS':0,
-                        'NCHAN':1,
-                        'CHAN_BW':1,
-                        'DM':0, 'RM':0, 'NCHNOFFS':0,
-                        'NSBLK':1}
+_LOFAR_defs['SUBINT'] = {'INT_TYPE': 'TIME',
+                         'SCALE': 'FluxDen',
+                         'POL_TYPE': 'AABB',
+                         'NPOL':1,
+                         'TBIN':(1./samplerate).to('s').value,
+                         'NBIN':1, 'NBIN_PRD':1,
+                         'PHS_OFFS':0,
+                         'NBITS':1,
+                         'ZERO_OFF':0, 'SIGNINT':0,
+                         'NSUBOFFS':0,
+                         'NCHAN':1,
+                         'CHAN_BW':1,
+                         'DM':0, 'RM':0, 'NCHNOFFS':0,
+                         'NSBLK':1}
 
-#    ____  ___ ___  ____  ______ 
+
+#    ____  ___ ___  ____  ______
 #   /    ||   |   ||    \|      |
 #  |   __|| _   _ ||  D  )      |
 #  |  |  ||  \_/  ||    /|_|  |_|
-#  |  |_ ||   |   ||    \  |  |  
-#  |     ||   |   ||  .  \ |  |  
-#  |___,_||___|___||__|\_| |__|  
-#                            
+#  |  |_ ||   |   ||    \  |  |
+#  |     ||   |   ||  .  \ |  |
+#  |___,_||___|___||__|\_| |__|
+#
 class GMRTdata(multifile):
     def __init__(self, timestamp_file, files, setsize=2**22,
                  utc_offset=TimeDelta(5.5*3600, format='sec'), comm=None):
@@ -553,7 +571,8 @@ class GMRTdata(multifile):
         self.timestamp_file = timestamp_file
         self.indices, self.timestamps, self.gsb_start = read_timestamp_file(
             timestamp_file, utc_offset)
-        self.fh_raw = [MPI.File.Open(self.comm, raw, amode=MPI.MODE_RDONLY) for raw in files]
+        self.fh_raw = [MPI.File.Open(self.comm, raw,
+                                     amode=MPI.MODE_RDONLY) for raw in files]
         self.setsize = setsize
         self.recsize = setsize
         self.index = 0
@@ -588,8 +607,8 @@ class GMRTdata(multifile):
             time0 = Time(time0, scale='utc')
 
         dt = (Time(date, scale='utc')-time0)
-        nskip = int(round( (dt/(self.recsize / self.samplerate))
-                    .to(u.dimensionless_unscaled)))
+        nskip = int(round((dt/(self.recsize / self.samplerate))
+                          .to(u.dimensionless_unscaled)))
         return nskip
 
     def ntimebins(self, t0, t1):
@@ -601,7 +620,8 @@ class GMRTdata(multifile):
             t0 = Time(t0, scale='utc')
         if isinstance(t1, str):
             t1 = Time(t1, scale='utc')
-        nt = ((t1-t0)*self.samplerate/(2*self.setsize)).to(u.dimensionless_unscaled).value
+        nt = ((t1-t0) * self.samplerate /
+              (2*self.setsize)).to(u.dimensionless_unscaled).value
         return np.ceil(nt).astype(int)
 
     def ntint(self, nchan):
@@ -629,7 +649,6 @@ class GMRTdata(multifile):
             fh.Seek(np.count_nonzero(self.indices[:self.index] == i) *
                     self.recsize)
 
-
     @property
     def time(self):
         return self.timestamps[self.index]
@@ -644,19 +663,20 @@ class GMRTdata(multifile):
 # Note: these are largely made-up at this point
 _GMRT_defs = {}
 _GMRT_defs['PRIMARY'] = {'TELESCOP':'GMRT',
-                        'IBEAM':1, 'FD_POLN':'LIN',
-                        'OBS_MODE':'SEARCH',
-                        'ANT_X':0, 'ANT_Y':0, 'ANT_Z':0, 'NRCVR':1,
-                        'FD_HAND':1, 'FD_SANG':0, 'FD_XYPH':0,
-                        'BE_PHASE':0, 'BE_DCC':0, 'BE_DELAY':0, 'TRK_MODE':'TRACK',
-                        'TCYCLE':0, 'OBSFREQ':300, 'OBSBW':100,
-                        'OBSNCHAN':0, 'CHAN_DM':0,
-                        'EQUINOX':2000.0, 'BMAJ':1, 'BMIN':1, 'BPA':0,
-                        'SCANLEN':1, 'FA_REQ':0,
-                        'CAL_FREQ':0, 'CAL_DCYC':0, 'CAL_PHS':0, 'CAL_NPHS':0,
-                        'STT_IMJD':54000, 'STT_SMJD':0, 'STT_OFFS':0}
+                         'IBEAM':1, 'FD_POLN':'LIN',
+                         'OBS_MODE':'SEARCH',
+                         'ANT_X':0, 'ANT_Y':0, 'ANT_Z':0, 'NRCVR':1,
+                         'FD_HAND':1, 'FD_SANG':0, 'FD_XYPH':0,
+                         'BE_PHASE':0, 'BE_DCC':0, 'BE_DELAY':0,
+                         'TRK_MODE':'TRACK',
+                         'TCYCLE':0, 'OBSFREQ':300, 'OBSBW':100,
+                         'OBSNCHAN':0, 'CHAN_DM':0,
+                         'EQUINOX':2000.0, 'BMAJ':1, 'BMIN':1, 'BPA':0,
+                         'SCANLEN':1, 'FA_REQ':0,
+                         'CAL_FREQ':0, 'CAL_DCYC':0, 'CAL_PHS':0, 'CAL_NPHS':0,
+                         'STT_IMJD':54000, 'STT_SMJD':0, 'STT_OFFS':0}
 samplerate = 100. * u.MHz / 3.
-_GMRT_defs['SUBINT']  = {'INT_TYPE': 'TIME',
+_GMRT_defs['SUBINT'] = {'INT_TYPE': 'TIME',
                         'SCALE': 'FluxDen',
                         'POL_TYPE': 'AABB',
                         'NPOL':1,
@@ -670,6 +690,7 @@ _GMRT_defs['SUBINT']  = {'INT_TYPE': 'TIME',
                         'CHAN_BW':1,
                         'DM':0, 'RM':0, 'NCHNOFFS':0,
                         'NSBLK':1}
+
 
 def read_timestamp_file(filename, utc_offset):
     pc_times = []
@@ -714,26 +735,30 @@ def read_timestamp_file(filename, utc_offset):
 
 #   __ __  ______  ____  _     _____
 #  |  |  ||      ||    || |   / ___/
-#  |  |  ||      | |  | | |  (   \_ 
+#  |  |  ||      | |  | | |  (   \_
 #  |  |  ||_|  |_| |  | | |___\__  |
 #  |  :  |  |  |   |  | |     /  \ |
 #  |     |  |  |   |  | |     \    |
 #   \__,_|  |__|  |____||_____|\___|
-#                                  
+#
 def good_name(f):
     """
     MPI.File.Open can't process files with colons.
-    This routine checks for such cases and creates a well-named link to the file.
+    This routine checks for such cases and creates a well-named
+    link to the file.
 
     Returns (good_name, islink)
     """
-    if f is None: return f
+    if f is None:
+        return f
 
     fl = f
     newlink = False
     if ':' in f:
-        #fl = tempfile.mktemp(prefix=os.path.basename(f).replace(':','_'), dir='/tmp')
-        fl = os.path.join('/tmp', os.path.dirname(f).replace('/','_') + '__' + os.path.basename(f).replace(':','_'))
+        #fl = tempfile.mktemp(prefix=os.path.basename(f)
+        # .replace(':','_'), dir='/tmp')
+        fl = os.path.join('/tmp', os.path.dirname(f).replace('/','_') +
+                          '__' + os.path.basename(f).replace(':','_'))
         if not os.path.exists(fl):
             try:
                 os.symlink(f, fl)
@@ -741,4 +766,3 @@ def good_name(f):
                 pass
             newlink = True
     return fl, newlink
-
