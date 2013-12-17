@@ -1,32 +1,33 @@
-""" FFT and Fold data """
 from __future__ import division, print_function
 
 from inspect import getargspec
 import numpy as np
 import os
 import astropy.units as u
+import astropy.io.fits as FITS
 
 try:
     import pyfftw
     pyfftw.interfaces.cache.enable()
-    from pyfftw.interfaces.scipy_fftpack import rfft, rfftfreq, irfft, fft, ifft, fftfreq
+    from pyfftw.interfaces.scipy_fftpack import rfft, rfftfreq, irfft, fft, ifft, fftfreq, fftshift
     _fftargs = {'threads': os.environ.get('OMP_NUM_THREADS', 2),
                 'planner_effort': 'FFTW_ESTIMATE'}
 except(ImportError):
     print("Consider installing pyfftw: https://github.com/hgomersall/pyFFTW")
     # use FFT from scipy, since unlike numpy it does not cast up to complex128
-    from scipy.fftpack import rfft, rfftfreq, irfft, fft, ifft, fftfreq
+    from scipy.fftpack import rfft, rfftfreq, irfft, fft, ifft, fftfreq, fftshift
     _fftargs = {}
 
 from fromfile import fromfile
 
 dispersion_delay_constant = 4149. * u.s * u.MHz**2 * u.cm**3 / u.pc
 
-def fold(fh, comm, dtype, samplerate, fedge, fedge_at_top, nchan,
+def fold(fh, comm, samplerate, fedge, fedge_at_top, nchan,
          nt, ntint, nskip, ngate, ntbin, ntw, dm, fref, phasepol,
          dedisperse='incoherent',
          do_waterfall=True, do_foldspec=True, verbose=True,
-         progress_interval=100, rfi_filter_raw=None, rfi_filter_power=None):
+         progress_interval=100, rfi_filter_raw=None, rfi_filter_power=None,
+         return_fits=True):
     """
     FFT data, fold by phase/time and make a waterfall series
     
@@ -35,8 +36,6 @@ def fold(fh, comm, dtype, samplerate, fedge, fedge_at_top, nchan,
     fh : file handle
         handle to file holding voltage timeseries
     comm: MPI communicator or None
-    dtype : numpy dtype or '4bit' or '1bit'
-        way the data are stored in the file
     samplerate : float
         rate at which samples were originally taken and thus double the
         band width (frequency units)
@@ -66,14 +65,17 @@ def fold(fh, comm, dtype, samplerate, fedge, fedge_at_top, nchan,
     phasepol : callable
         function that returns the pulsar phase for time in seconds relative to
         start of part of the file that is read (i.e., ignoring nhead)
-    dedisperse : None or string
-        None, 'incoherent', 'coherent', 'by-channel'
+    dedisperse : None or string (default: incoherent).
+        None, 'incoherent', 'coherent', 'by-channel'.
+        Note: None really does nothing
     do_waterfall, do_foldspec : bool
         whether to construct waterfall, folded spectrum (default: True)
     verbose : bool or int
         whether to give some progress information (default: True)
     progress_interval : int
         Ping every progress_interval sets
+    return_fits : bool (default: True)
+        return a subint fits table for rank == 0 (None otherwise)
         
     """
     if comm is None:
@@ -99,12 +101,9 @@ def fold(fh, comm, dtype, samplerate, fedge, fedge_at_top, nchan,
         if verbose and rank == 0:
             print('Skipping {0} records = {1} bytes'
                   .format(nskip, nskip*fh.recsize))
-        if size == 1:
-            # MPI: only skip here if we are not threaded, otherwise seek in for-loop
-            fh.seek(nskip * count * itemsize)
 
     # LOFAR data is already channelized
-    if hasattr(fh, 'fwidth'):
+    if fh.telescope == 'lofar':
        dtsample = (1./fh.fwidth).to(u.s)
        dt1 = dtsample
     else:
@@ -122,7 +121,7 @@ def fold(fh, comm, dtype, samplerate, fedge, fedge_at_top, nchan,
         tstart = dtsample * ntint * nskip
 
     # set up FFT functions: real vs complex fft's
-    if fh.real_data:
+    if fh.telescope == 'aro':
         thisfft = rfft
         thisifft = irfft
         thisfftfreq = rfftfreq
@@ -133,27 +132,32 @@ def fold(fh, comm, dtype, samplerate, fedge, fedge_at_top, nchan,
 
     # pre-calculate time delay due to dispersion in coarse channels
     # LOFAR data is already channelized
-    if hasattr(fh, 'freqs'):
+    if fh.telescope == 'lofar':
         freq = fh.freqs
-    else:
+    elif fh.telescope == 'aro':
         if fedge_at_top:
             freq = fedge - thisfftfreq(nchan*2, dt1.value) * u.Hz
         else:
             freq = fedge + thisfftfreq(nchan*2, dt1.value) * u.Hz
-  
-    if fh.real_data:
-        # ARO data
+        # sort lowest to highest freq
+        # freq.sort()
         # [::2] sets frequency channels to numerical recipes ordering
         # or, rfft has an unusual ordering
-        dt = (dispersion_delay_constant * dm *
-                 (1./freq[::2]**2 - 1./fref**2)).to(u.s).value
-    else:
-        dt = (dispersion_delay_constant * dm *
-                 (1./freq**2 - 1./fref**2)).to(u.s).value
+        freq = freq[::2]
+    elif fh.telescope == 'gmrt':
+        freq = fftshift(fftfreq(nchan, 2.*dt1.value)) * u.Hz
+        if fedge_at_top:
+            freq = fedge - (freq-freq[0])
+        else:   
+            freq = fedge + (freq-freq[0])
+
+  
+    dt = (dispersion_delay_constant * dm *
+             (1./freq**2 - 1./fref**2)).to(u.s).value
 
     if dedisperse in ['coherent', 'by-channel']:
         # pre-calculate required turns due to dispersion
-        if hasattr(fh, 'freqs'):
+        if fh.telescope == 'lofar':
             fcoh = (freq[np.newaxis,:] +
                     fftfreq(ntint, dtsample.value)[:,np.newaxis] * u.Hz)
         else:
@@ -173,7 +177,7 @@ def fold(fh, comm, dtype, samplerate, fedge, fedge_at_top, nchan,
         dang = (dispersion_delay_constant * dm * fcoh *
                 (1./_fref-1./fcoh)**2) * 360. * u.deg
 
-        if fh.real_data:
+        if fh.telescope == 'aro':
             # order of frequencies is r[0], r[1],i[1],...r[n-1],i[n-1],r[n]
             # for 0 and n need only real part, but for 1...n-1 need real, imag
             # so just get shifts for r[1], r[2], ..., r[n-1]
@@ -191,14 +195,10 @@ def fold(fh, comm, dtype, samplerate, fedge, fedge_at_top, nchan,
         # just in case numbers were set wrong -- break if file ends
         # better keep at least the work done
         try:
-            # MPI processes read like a slinky
-            if size > 1:
-                fh.seek( (nskip+j) * count * itemsize)
-
             # ARO/GMRT return int-stream, LOFAR returns complex64 (count/nchan, nchan)
-            raw = fh.record_read(count)
-            print("READ",j, fh.index, fh.fh_raw[fh.sequence['raw'][fh.index]].Get_position(), rank, size)
-
+            # LOFAR "combined" file class can do lots of seeks, we minimize that with
+            # the 'seek_record_read' routine
+            raw = fh.seek_record_read( (nskip+j)*count*itemsize, count)
         except(EOFError, IOError) as exc:
             print("Hit {}; writing pgm's".format(exc))
             break
@@ -206,7 +206,7 @@ def fold(fh, comm, dtype, samplerate, fedge, fedge_at_top, nchan,
             print("Read {} items".format(raw.size), end="")
 
         if rfi_filter_raw is not None:
-            raw = rfi_filter_raw(raw)
+            raw = rfi_filter_raw(raw, nchan)
             if verbose >= 2:
                 print("... raw RFI", end="")
 
@@ -238,6 +238,7 @@ def fold(fh, comm, dtype, samplerate, fedge, fedge_at_top, nchan,
             # re-order to Num.Rec. format: Re[0], Re[n/2], Re[1], ....
             power = np.hstack((chan2[:,:1]+chan2[:,-1:],
                                chan2[:,1:-1].reshape(-1,nchan-1,2).sum(-1)))
+
         elif fh.telescope == 'gmrt':
             chan = vals.reshape(-1, nchan)
             power = chan.real**2+chan.imag**2
@@ -268,8 +269,12 @@ def fold(fh, comm, dtype, samplerate, fedge, fedge_at_top, nchan,
             for k in xrange(nchan):
                 if dedisperse == 'coherent':
                     t = tsample  # already dedispersed
-                else:
+                elif dedisperse in ['incoherent', 'by-channel']:
                     t = tsample - dt[k]  # dedispersed times
+                elif dedisperse is None:
+                    t = tsample # do nothing
+                else:
+                    t = tsample - dt[k]
 
                 phase = phasepol(t)  # corresponding PSR phases
                 iphase = np.remainder(phase*ngate,
@@ -288,7 +293,78 @@ def fold(fh, comm, dtype, samplerate, fedge, fedge_at_top, nchan,
     if verbose:
         print('read {0:6d} out of {1:6d}'.format(j+1, nt))
 
-    return foldspec, icount, waterfall
+    if return_fits and rank == 0:
+        # subintu HDU
+        # update table columns
+        # TODO: allow multiple polarizations
+        npol = 1
+        newcols = []
+        # FITS table creation difficulties... assign data *after* 'new_table' creation
+        array2assign = {}
+        tsubint = ntint*dtsample
+        for col in fh['subint'].columns:
+            attrs = col.copy().__dict__
+            # remove non-init args
+            for nn in ['_pseudo_unsigned_ints', '_dims', '_physical_values',
+                       'dtype', '_phantom', 'array']:
+                attrs.pop(nn, None)
+
+            if col.name == 'TSUBINT':
+                array2assign[col.name] = np.array(tsubint)
+            elif col.name == 'OFFS_SUB':
+                array2assign[col.name] = np.arange(ntbin) * tsubint 
+            elif col.name == 'DAT_FREQ':
+                # TODO: sort from lowest freq. to highest ('DATA') needs sorting as well
+                array2assign[col.name] = freq.to(u.MHz).value.astype(np.double)
+                attrs['format'] = '{0}D'.format(freq.size)
+            elif col.name == 'DAT_WTS':
+                array2assign[col.name] = np.ones(freq.size, dtype=np.float32)
+                attrs['format'] = '{0}E'.format(freq.size)
+            elif col.name == 'DAT_OFFS':
+                array2assign[col.name] = np.zeros(freq.size*npol, dtype=np.float32)
+                attrs['format'] = '{0}E'.format(freq.size*npol)
+            elif col.name == 'DAT_SCL':
+                array2assign[col.name] = np.ones(freq.size*npol, dtype=np.float32)
+                attrs['format'] = '{0}E'.format(freq.size)
+            elif col.name == 'DATA':
+                array2assign[col.name] = np.zeros((ntbin, npol, freq.size, ngate), dtype='i1')
+                attrs['dim'] = "({},{},{})".format(ngate, freq.size, npol) 
+                attrs['format'] = "{0}I".format(ngate*freq.size*npol)
+            newcols.append(FITS.Column(**attrs))
+        newcoldefs = FITS.ColDefs(newcols)
+
+        oheader = fh['SUBINT'].header.copy()
+        newtable = FITS.new_table(newcoldefs, nrows=ntbin, header=oheader)
+        # update the 'subint' header and create a new one to be returned
+        # owing to the structure of the code (MPI), we need to assign
+        # the 'DATA' outside of fold.py 
+        newtable.header.update('NPOL', 1)
+        newtable.header.update('NBIN', ngate)
+        newtable.header.update('NBIN_PRD', ngate)
+        newtable.header.update('NCHAN', freq.size)
+        newtable.header.update('INT_UNIT', 'PHS')
+        newtable.header.update('TBIN', tsubint.to(u.s).value) 
+        chan_bw = np.abs(np.diff(freq.to(u.MHz).value).mean())
+        newtable.header.update('CHAN_BW', chan_bw)
+        if dedisperse in ['coherent', 'by-channel', 'incoherent']:
+            newtable.header.update('DM', dm.value)
+        # finally assign the table data
+        for name, array in array2assign.iteritems():
+            try:
+                newtable.data.field(name)[:] = array
+            except ValueError:
+                print("FITS error... work in progress", name, array.shape, newtable.data.field(name)[:].shape)
+                 
+        phdu = fh['PRIMARY'].copy()
+        subinttable = FITS.HDUList([phdu, newtable])
+        subinttable[1].header.update('EXTNAME', 'SUBINT')
+        subinttable['PRIMARY'].header.update('DATE-OBS', fh.time0.isot)
+        subinttable['PRIMARY'].header.update('STT_IMJD', int(fh.time0.mjd))
+        subinttable['PRIMARY'].header.update('STT_SMJD', int(str(fh.time0.mjd - int(fh.time0.mjd))[2:])*86400)
+    else:
+        subinttable = FITS.HDUList([])
+  
+    return foldspec, icount, waterfall, subinttable
 
 
 class Folder(dict):
@@ -310,7 +386,6 @@ class Folder(dict):
             self[fold_argnames[Nargs - Ndefaults + i]] = v
             
         # get some defaults from fh (may be overwritten by kwargs)
-        self['dtype'] = fh.dtype
         self['samplerate'] = fh.samplerate #(1./fh['SUBINT'].header['TBIN']*u.Hz).to(u.MHz)
         self['fedge'] = fh.fedge
         self['fedge_at_top'] = fh.fedge_at_top
@@ -329,8 +404,8 @@ class Folder(dict):
             print("Missing 'fold' arguments: {}".format(missing))
                 
     def __call__(self, fh, comm=None):
-        ifold, icount, water = fold(fh, comm=comm, **self)
-        return ifold, icount, water
+        ifold, icount, water, subint = fold(fh, comm=comm, **self)
+        return ifold, icount, water, subint
 
 
 def normalize_counts(q, count=None):
