@@ -140,8 +140,7 @@ class observation(dict):
             raise Warning(wrn)
 
         elif not isinstance(phasepol, Polynomial):
-            subs = [self['src'], self['date']]
-            print("Calculating {0} polyco at {1}".format(*subs))
+            print("Calculating {0} polyco at {1}".format(self['src'], time0))
             from pulsar.predictor import Polyco
 
             polyco_file = get_pkg_data_filename(phasepol)

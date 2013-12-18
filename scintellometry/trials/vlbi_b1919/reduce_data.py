@@ -191,7 +191,7 @@ def CL_parser():
         "in observations.conf), and the start and finish timestamps.")
     d_parser.add_argument(
         '-t','--telescope', type=str, default='aro',
-        help="The data to reduce. One of ['aro', 'lofar', 'gmrt']." )
+        help="The data to reduce. One of ['aro', 'lofar', 'gmrt'].")
     d_parser.add_argument(
         '-d','--date', type=str, default='2013-07-25T18:14:20',
         help="The date of the data to reduce. "
@@ -260,20 +260,19 @@ if __name__ == '__main__':
         # (previously args.nchan = 20)
         args.nchan = None
         args.ngate = 512
-        args.date = '2013-07-25'  # Note, dates are made up for now
-        args.ntbin = 6
+        args.date = '2013-07-25'
+        args.ntbin = 5
         args.ntw_min = 10200
-        args.waterfall = False
+        args.waterfall = True
         args.verbose += 1
         args.dedisperse = 'incoherent'
         args.rfi_filter_raw = None
 
     elif args.reduction_defaults == 'aro':
         # do nothing, args are already set to aro.py defaults
-        args.reduction_defaults = rfi_filter_raw
+        args.verbose += 1
 
     elif args.reduction_defaults == 'gmrt':
-        # to-do...
         args.telescope = 'gmrt'
         args.date = '2013-07-25'  # Note, gmrt dates made up for now
         args.nchan = 512
@@ -283,6 +282,7 @@ if __name__ == '__main__':
         args.ntw_min = 170
         args.rfi_filter_raw = None
         args.waterfall = True
+        args.verbose += 1
         args.dedisperse = 'incoherent'
     reduce(
         args.telescope, args.date, tstart=args.starttime, tend=args.endtime,

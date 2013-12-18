@@ -582,7 +582,7 @@ class GMRTdata(multifile):
         self.fedge = 156. * u.MHz
         self.fedge_at_top = True
         self.time0 = self.timestamps[0]
-        # GMRT time is off by 1 second
+        # GMRT time is off by one 32MB record
         self.time0 -= (2.**24/(100*u.MHz/6.)).to(u.s)
         self.dtype = np.int8
         self.itemsize = {np.int8: 2}[self.dtype]
@@ -607,7 +607,7 @@ class GMRTdata(multifile):
             time0 = Time(time0, scale='utc')
 
         dt = (Time(date, scale='utc')-time0)
-        nskip = int(round((dt/(self.recsize / self.samplerate))
+        nskip = int(round((dt * self.samplerate / self.recsize)
                           .to(u.dimensionless_unscaled)))
         return nskip
 
@@ -621,7 +621,7 @@ class GMRTdata(multifile):
         if isinstance(t1, str):
             t1 = Time(t1, scale='utc')
         nt = ((t1-t0) * self.samplerate /
-              (2*self.setsize)).to(u.dimensionless_unscaled).value
+              (self.recsize)).to(u.dimensionless_unscaled).value
         return np.ceil(nt).astype(int)
 
     def ntint(self, nchan):
