@@ -92,9 +92,9 @@ def fold(fh, comm, samplerate, fedge, fedge_at_top, nchan,
     nwsize = nt*ntint//ntw
     waterfall = np.zeros((nchan, nwsize))
 
-    count = nchan*ntint
-    itemsize = fh.itemsize
-#    recsize = count*itemsize
+    # number of samples per record (real/imag counted separately)
+    setsize = fh.setsize
+
     if verbose and rank == 0:
         print('Reading from {}'.format(fh))
 
@@ -103,23 +103,13 @@ def fold(fh, comm, samplerate, fedge, fedge_at_top, nchan,
             print('Skipping {0} records = {1} bytes'
                   .format(nskip, nskip*fh.recsize))
 
-    # LOFAR data is already channelized
+    dt1 = (1./fh.samplerate).to(u.s)
+    # need 2*nchan real-valued samples for each FFT
     if fh.telescope == 'lofar':
-        dtsample = (1./fh.fwidth).to(u.s)
-        dt1 = dtsample
+        dtsample = fh.dtsample
     else:
-        #ARO data
-        dt1 = (1./samplerate).to(u.s)
-        # need 2*nchan real-valued samples for each FFT
         dtsample = nchan * 2 * dt1
-
-    if fh.telescope == 'gmrt':
-        # but include 2*nchan real-valued samples used for each FFT
-        # (or, equivalently, real and imag for channels)
-        tstart = dt1 * nskip * count * itemsize
-    elif fh.telescope in ['aro', 'lofar']:
-        # need 2*nchan real-valued samples for each FFT for ARO
-        tstart = dtsample * ntint * nskip
+    tstart = dtsample * ntint * nskip
 
     # set up FFT functions: real vs complex fft's
     if fh.telescope == 'aro':
@@ -198,9 +188,9 @@ def fold(fh, comm, samplerate, fedge, fedge_at_top, nchan,
             # LOFAR returns complex64 (count/nchan, nchan)
             # LOFAR "combined" file class can do lots of seeks, we minimize
             # that with the 'seek_record_read' routine
-            raw = fh.seek_record_read((nskip+j)*count*itemsize, count)
+            raw = fh.seek_record_read((nskip+j)*setsize, setsize)
         except(EOFError, IOError) as exc:
-            print("Hit {}; writing pgm's".format(exc))
+            print("Hit {0!r}; writing pgm's".format(exc))
             break
         if verbose >= 2:
             print("Read {} items".format(raw.size), end="")
@@ -211,38 +201,34 @@ def fold(fh, comm, samplerate, fedge, fedge_at_top, nchan,
                 print("... raw RFI (zap {0}/{1})"
                       .format(np.count_nonzero(~ok), ok.size), end="")
 
-        if fh.telescope == 'lofar':
-            vals = raw
-        elif fh.telescope == 'aro':
+        if fh.telescope == 'aro':
             vals = raw.astype(np.float32)
-        elif fh.telescope == 'gmrt':
-            # data just a series of byte pairs, of real and imag
-            vals = raw.astype(np.float32).view(np.complex64).squeeze()
+        else:
+            vals = raw
 
+        # TODO: for coherent dedispersion, need to undo existing channels
+        # for lofar and gmrt-phased
         if dedisperse in ['coherent', 'by-channel']:
             fine = thisfft(vals, axis=0, overwrite_x=True, **_fftargs)
-            if fh.telescope == 'lofar':
-                fine *= dd_coh
-            else:
+            if fh.telescope == 'aro':
                 fine_cmplx = fine[1:-1].view(np.complex64)
                 fine_cmplx *= dd_coh  # overwrites parts of fine, as intended
+            else:
+                fine *= dd_coh
+
             vals = thisifft(fine, axis=0, overwrite_x=True, **_fftargs)
             if verbose >= 2:
                 print("... dedispersed", end="")
 
-        if fh.telescope == 'lofar':
-            power = vals.real**2 + vals.imag**2
-        elif fh.telescope == 'aro':
+        if fh.telescope == 'aro':
             chan2 = thisfft(vals.reshape(-1, nchan*2), axis=-1,
                             overwrite_x=True, **_fftargs)**2
             # rfft: Re[0], Re[1], Im[1], ..., Re[n/2-1], Im[n/2-1], Re[n/2]
             # re-order to Num.Rec. format: Re[0], Re[n/2], Re[1], ....
             power = np.hstack((chan2[:,:1]+chan2[:,-1:],
                                chan2[:,1:-1].reshape(-1,nchan-1,2).sum(-1)))
-
-        elif fh.telescope == 'gmrt':
-            chan = vals.reshape(-1, nchan)
-            power = chan.real**2+chan.imag**2
+        else:  # lofar and gmrt-phased are already channelised
+            power = vals.real**2 + vals.imag**2
 
         if verbose >= 2:
             print("... power", end="")

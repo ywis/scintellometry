@@ -6,39 +6,124 @@ import numpy as np
 import os
 import re
 
-from astropy.table import Table
 from astropy import units as u
 from astropy.time import Time, TimeDelta
 from fromfile import fromfile
 from h5py import File as HDF5File
-from mpi4py import MPI
+try:
+    from mpi4py import MPI
+except ImportError:
+    pass
 from psrfits_tools import psrFITS
+
 
 # size in bytes of records read from file (simple for ARO: 1 byte/sample)
 # double since we need to get ntint samples after FFT
-_bytes_per_sample = {np.int8: 2, '4bit': 1}
+def bytes_per_sample(dtype):
+    bps = {'ci1': 2, '4bit': 0.5}.get(dtype, None)
+    if bps is None:
+        bps = np.dtype(dtype).itemsize
+    return bps
+
+# default properties for various telescopes
+_defaults = {}
 
 # hdf5 dtype conversion
 _lofar_dtypes = {'float':'>f4', 'int8':'>i1'}
 
 
-class multifile(psrFITS):
+class MultiFile(psrFITS):
+
+    def __init__(self, files=None, comm=None):
+        super(MultiFile, self).__init__(hdus=['SUBINT'])
+        self.set_hdu_defaults(_defaults[self.telescope])
+        if comm is None:
+            self.comm = MPI.COMM_SELF
+        else:
+            self.comm = comm
+        if files is not None:
+            self.open(files)
+
+    def set_hdu_defaults(self, dictionary):
+        for hdu in dictionary:
+            self[hdu].header.update(dictionary[hdu])
+
+    def open(self, files):
+        # MPI.File.Open doesn't handle files with ":"
+        self.fh_raw = []
+        self.fh_links = []
+        for raw in files:
+            fname, islnk = good_name(os.path.abspath(raw))
+            self.fh_raw.append(MPI.File.Open(self.comm, fname,
+                                             amode=MPI.MODE_RDONLY))
+            if islnk:
+                self.fh_links.append(fname)
+
+    def close(self):
+        for fh in self.fh_raw:
+            fh.Close()
+        for fh in self.fh_links:
+            if os.path.exists(fh):
+                os.unlink(fh)
+
+    def seek(self, offset):
+        assert offset % self.setsize == 0
+        self.index = offset // self.setsize
+        for i, fh in enumerate(self.fh_raw):
+            fh.Seek(np.count_nonzero(self.indices[:self.index] == i) *
+                    self.recsize)
+
+    def read(self, size):
+        assert size == self.recsize
+        if self.index == len(self.indices):
+            raise EOFError
+        self.index += 1
+        z = np.zeros(size, dtype='i1')
+        self.fh_raw[self.indices[self.index-1]].Iread(z)
+        return z
 
     # ARO and GMRT (LOFAR_Pcombined overwrites this)
     def seek_record_read(self, offset, count):
+        """Read count samples starting from offset (also in samples)"""
         self.seek(offset)
         return self.record_read(count)
 
-    def set_hdu_defaults(self, dictionary):
-        for hdu, defs in dictionary.iteritems():
-            for card, val in defs.iteritems():
-                self[hdu].header.update(card, val)
+    def record_read(self, count):
+        return fromfile(self, self.dtype,
+                        self.recsize).reshape(-1, self.nchan).squeeze()
+
+    def nskip(self, date, time0=None):
+        """
+        return the number of records needed to skip from start of
+        file to iso timestamp 'date'.
+
+        Optionally:
+        time0 : use this start time instead of self.time0
+                either a astropy.time.Time object or string in 'utc'
+        """
+        time0 = self.time0 if time0 is None else Time(time0, scale='utc')
+        dt = Time(date, scale='utc') - time0
+        nskip = int(round((dt / self.dtsample / self.setsize)
+                          .to(u.dimensionless_unscaled)))
+        return nskip
+
+    def ntimebins(self, t0, t1):
+        """
+        determine the number of timebins between UTC start time 't0'
+        and end time 't1'
+        """
+        t0 = Time(t0, scale='utc')
+        t1 = Time(t1, scale='utc')
+        nt = ((t1-t0) / self.dtsample /
+              (self.setsize)).to(u.dimensionless_unscaled).value
+        return np.ceil(nt).astype(int)
+
+    # for use in context manager ("with <MultiFile> as fh:")
+    def __enter__(self):
+        return self
 
     def __exit__(self, exc_type, exc_value, traceback):
         self.close()
-
-    def __enter__(self):
-        return self
 
 
 #    ____  ____   ___
@@ -49,21 +134,22 @@ class multifile(psrFITS):
 #  |  |  ||  .  \     |
 #  |__|__||__|\_|\___/
 #
-class AROdata(multifile):
-    def __init__(self, sequence_file, raw_voltage_files, setsize=2**25,
-                 dtype='4bit', samplerate=200.*u.MHz, comm=None):
-        self.telescope = 'aro'
-        super(AROdata, self).__init__(hdus=['SUBINT'])
-        self.set_hdu_defaults(_ARO_defs)
+class AROdata(MultiFile):
 
-        if comm is None:
-            self.comm = MPI.COMM_SELF
-        else:
-            self.comm = comm
+    telescope = 'aro'
+
+    def __init__(self, sequence_file, raw_voltage_files, setsize=2**26,
+                 dtype='4bit', samplerate=200.*u.MHz, comm=None):
+
+        super(AROdata, self).__init__(raw_voltage_files, comm=comm)
+
         self.sequence_file = sequence_file
-        self.sequence = Table(np.loadtxt(sequence_file, np.int32),
-                              names=['seq', 'raw'])
-        self.sequence.sort('seq')
+        seq, indices = np.loadtxt(sequence_file, np.int32, unpack=True)
+
+        # seq starts counting at 2 for some reason
+        seq -= 2
+        self.indices = -np.ones(seq.max() + 1, dtype=np.int64)
+        self.indices[seq] = indices
 
         # get start date from sequence filename
         arodate = re.search('\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}',
@@ -73,142 +159,74 @@ class AROdata(multifile):
             # convert time to UTC; dates given in EDT
             self.time0 = Time(isot, scale='utc') + 4*u.hr
             self['PRIMARY'].header['DATE-OBS'] = self.time0.iso
-            # ARO time is off by two 32MiB record or 64Misamples
-            self.time0 -= (2.**27/(200.*u.MHz)).to(u.s)
+            # ARO time is off by two 32MiB record or 128Misamples
+            self.time0 -= (2.**27/samplerate).to(u.s)
         else:
             self.time0 = None
-        # MPI.File.Open doesn't handle files with ":"
-        self.fh_raw = []
-        self.fh_links = []
-        for raw in raw_voltage_files:
-            fname, islnk = good_name(os.path.abspath(raw))
-            self.fh_raw.append(MPI.File.Open(self.comm, fname,
-                                             amode=MPI.MODE_RDONLY))
-            if islnk:
-                self.fh_links.append(fname)
+
         self.index = 0
-        self.seq0 = self.sequence['seq'][0]
 
         # defaults expected by fold.py
         self.dtype = dtype
-        self.itemsize = _bytes_per_sample.get(dtype, None)
-        if self.itemsize is None:
-            self.itemsize = np.dtype(dtype).itemsize
-        self.setsize = setsize
-        self.recsize = setsize
+        self.itemsize = bytes_per_sample(dtype)
+        self.setsize = setsize  # number of samples
+        assert (setsize * self.itemsize) % 1 == 0
+        self.recsize = int(setsize * self.itemsize)  # number of bytes
         self.fedge = 200. * u.MHz
         self.fedge_at_top = True
+        self.nchan = 1
         self.samplerate = samplerate
+        self.dtsample = (1./samplerate).to(u.s)
         # update headers for fun
         self[0].header.update('TBIN', (1./samplerate).to('s').value),
-
-    def close(self):
-        for fh in self.fh_raw:
-            fh.Close()
-        for fh in self.fh_links:
-            if os.path.exists(fh):
-                os.unlink(fh)
-
-    def nskip(self, date, time0=None):
-        """
-        return the number of records needed to skip from start of
-        file to iso timestamp 'date'.
-
-        Optionally:
-        time0 : use this start time instead of self.time0
-                either a astropy.time.Time object or string in 'utc'
-
-        """
-        if time0 is None:
-            time0 = self.time0
-        elif isinstance(time0, str):
-            time0 = Time(time0, scale='utc')
-
-        dt = (Time(date, scale='utc')-time0)
-        nskip = int(round((dt/(self.recsize*2 / self.samplerate))
-                    .to(u.dimensionless_unscaled)))
-        return nskip
-
-    def ntimebins(self, t0, t1):
-        """
-        determine the number of timebins between UTC start time 't0'
-        and end time 't1'.
-        """
-        if isinstance(t0, str):
-            t0 = Time(t0, scale='utc')
-        if isinstance(t1, str):
-            t1 = Time(t1, scale='utc')
-        nt = ((t1-t0)*self.fedge /
-              (2*self.setsize)).to(u.dimensionless_unscaled).value
-        return np.ceil(nt).astype(int)
 
     def ntint(self, nchan):
         """
         number of samples in a frequency bin
         this is baseband data so need to know number of channels we're making
-
         """
-        return 2*self.recsize // (2*nchan)
-
-    def read(self, size):
-        assert size == self.recsize
-        if self.index == len(self.sequence):
-            raise EOFError
-        self.index += 1
-        # so far, only works for continuous data, so ensure we're not missing
-        # any sequence numbers
-        if self.sequence['seq'][self.index-1] != self.index-1 + self.seq0:
-            raise IOError("multifile sequence numbers have to be consecutive")
-        i = self.sequence['raw'][self.index-1]
-        # MPI needs a buffer to read into
-        z = np.zeros(size, dtype='i1')
-        self.fh_raw[i].Iread(z)
-        return z
-
-    def record_read(self, count):
-        return fromfile(self, self.dtype, count*self.itemsize)
-
-    def seek(self, offset):
-        assert offset % self.recsize == 0
-        self.index = offset // self.recsize
-        for i, fh in enumerate(self.fh_raw):
-            fh.Seek(np.count_nonzero(self.sequence['raw'][:self.index] == i) *
-                    self.recsize)
+        return self.setsize // (2*nchan)
 
     def __repr__(self):
-        return ("<open multifile raw_voltage_files {} "
+        return ("<open MultiFile raw_voltage_files {} "
                 "using sequence file '{}' at index {}>"
                 .format(self.fh_raw, self.sequence_file, self.index))
 
-_ARO_defs = {}
-_ARO_defs['PRIMARY'] = {'TELESCOP':'Algonquin',
-                        'IBEAM':1, 'FD_POLN':'LIN',
-                        'OBS_MODE':'SEARCH',
-                        'ANT_X':0, 'ANT_Y':0, 'ANT_Z':0, 'NRCVR':1,
-                        'FD_HAND':1, 'FD_SANG':0, 'FD_XYPH':0,
-                        'BE_PHASE':0, 'BE_DCC':0, 'BE_DELAY':0,
-                        'TRK_MODE':'TRACK',
-                        'TCYCLE':0, 'OBSFREQ':300, 'OBSBW':100,
-                        'OBSNCHAN':20, 'CHAN_DM':0,
-                        'EQUINOX':2000.0, 'BMAJ':1, 'BMIN':1, 'BPA':0,
-                        'SCANLEN':1, 'FA_REQ':0,
-                        'CAL_FREQ':0, 'CAL_DCYC':0, 'CAL_PHS':0, 'CAL_NPHS':0,
-                        'STT_IMJD':54000, 'STT_SMJD':0, 'STT_OFFS':0}
-samplerate = 200. * u.MHz
-_ARO_defs['SUBINT'] = {'INT_TYPE': 'TIME',
-                       'SCALE': 'FluxDen',
-                       'POL_TYPE': 'AABB',
-                       'NPOL':1,
-                       'TBIN':(1./samplerate).to('s').value,
-                       'NBIN':1, 'NBIN_PRD':1,
-                       'PHS_OFFS':0,
-                       'NBITS':1,
-                       'ZERO_OFF':0, 'SIGNINT':0,
-                       'NSUBOFFS':0,
-                       'NCHAN':1,
-                       'CHAN_BW':1,
-                       'DM':0, 'RM':0, 'NCHNOFFS':0,
-                       'NSBLK':1}
+
+_defaults['aro'] = {
+    'PRIMARY': {'TELESCOP': 'Algonquin',
+                'IBEAM': 1,
+                'FD_POLN': 'LIN',
+                'OBS_MODE': 'SEARCH',
+                'ANT_X': 0, 'ANT_Y': 0, 'ANT_Z': 0,
+                'NRCVR': 1,
+                'FD_HAND': 1, 'FD_SANG': 0, 'FD_XYPH': 0,
+                'BE_PHASE': 0, 'BE_DCC': 0, 'BE_DELAY': 0,
+                'TRK_MODE': 'TRACK',
+                'TCYCLE': 0, 'OBSFREQ': 300, 'OBSBW': 100,
+                'OBSNCHAN': 20, 'CHAN_DM': 0,
+                'EQUINOX': 2000.0,
+                'BMAJ': 1, 'BMIN': 1, 'BPA': 0,
+                'SCANLEN': 1, 'FA_REQ': 0,
+                'CAL_FREQ': 0, 'CAL_DCYC': 0,
+                'CAL_PHS': 0, 'CAL_NPHS': 0,
+                'STT_IMJD': 54000, 'STT_SMJD': 0, 'STT_OFFS': 0},
+    'SUBINT': {'INT_TYPE': 'TIME',
+               'SCALE': 'FluxDen',
+               'POL_TYPE': 'AABB',
+               'NPOL': 1,
+               'NBIN': 1,
+               'NBIN_PRD': 1,
+               'PHS_OFFS': 0,
+               'NBITS': 1,
+               'ZERO_OFF': 0,
+               'SIGNINT': 0,
+               'NSUBOFFS': 0,
+               'NCHAN': 1,
+               'CHAN_BW': 1,
+               'DM': 0, 'RM': 0,
+               'NCHNOFFS': 0,
+               'NSBLK': 1}}
 
 
 #   _       ___   _____   ____  ____
@@ -219,26 +237,18 @@ _ARO_defs['SUBINT'] = {'INT_TYPE': 'TIME',
 #  |     ||     ||  |   |  |  ||  .  \
 #  |_____| \___/ |__|   |__|__||__|\_|
 #
-class LOFARdata(multifile):
+class LOFARdata(MultiFile):
+
+    telescope = 'lofar'
+
     def __init__(self, fname1, fname2, comm=None, setsize=2**16):
         """
         Initialize a lofar observation, tracking/joining the two polarizations.
         We also parse the corresponding HDF5 files to initialize:
         nchan, samplerate, fwidth
-
         """
-        self.telescope = 'lofar'
-        super(LOFARdata, self).__init__(hdus=['SUBINT'])
-        self.set_hdu_defaults(_LOFAR_defs)
+        super(LOFARdata, self).__init__([fname1, fname2], comm=comm)
 
-        self.fname1 = fname1
-        self.fname2 = fname2
-        if comm is None:
-            self.comm = MPI.COMM_SELF
-        else:
-            self.comm = comm
-        self.fh1 = MPI.File.Open(self.comm, fname1, amode=MPI.MODE_RDONLY)
-        self.fh2 = MPI.File.Open(self.comm, fname2, amode=MPI.MODE_RDONLY)
         # read the HDF5 file and get useful data
         h0 = HDF5File(fname1.replace('.raw', '.h5'), 'r')
         saps = sorted([i for i in h0.keys() if 'SUB_ARRAY_POINTING' in i])
@@ -270,7 +280,7 @@ class LOFARdata(multifile):
         # defaults expected by fold.py
         self.time0 = time0
         self.dtype = _lofar_dtypes[dtype]
-        self.itemsize = _bytes_per_sample.get(self.dtype, None)
+        self.itemsize = bytes_per_sample(self.dtype)
         if self.itemsize is None:
             self.itemsize = np.dtype(self.dtype).itemsize
 
@@ -278,51 +288,14 @@ class LOFARdata(multifile):
         self.nchan = nchan
         self.fwidth = fwidth  # = samplerate = np.diff(freqs).mean()
         self.setsize = setsize
-        self.recsize = 4 * nchan * setsize
+        self.recsize = self.itemsize * nchan * setsize
         self.freqs = freqs
         self.fedge = fbottom
         self.fedge_at_top = False
-
+        self.dtsample = (1./self.fwidth).to(u.s)
         # update some of the hdu data
         self['PRIMARY'].header['DATE-OBS'] = self.time0.isot
         self[0].header.update('TBIN', (1./samplerate).to('s').value)
-
-    def close(self):
-        self.fh1.Close()
-        self.fh2.Close()
-
-    def nskip(self, date, time0=None):
-        """
-        return the number of records needed to skip from start of
-        file to iso timestamp 'date'.
-
-        Optionally:
-        time0 : use this start time instead of self.time0
-                either a astropy.time.Time object or string in 'utc'
-
-        """
-        if time0 is None:
-            time0 = self.time0
-        elif isinstance(time0, str):
-            time0 = Time(time0, scale='utc')
-
-        dt = (Time(date, scale='utc')-time0)
-        nskip = int(round((dt / (self.ntint(self.nchan) / self.fwidth))
-                          .to(u.dimensionless_unscaled)))
-        return nskip
-
-    def ntimebins(self, t0, t1):
-        """
-        determine the number of timebins between UTC start time 't0'
-        and end time 't1'
-        """
-        if isinstance(t0, str):
-            t0 = Time(t0, scale='utc')
-        if isinstance(t1, str):
-            t1 = Time(t1, scale='utc')
-        nt = ((t1-t0)*self.fwidth /
-              (self.setsize)).to(u.dimensionless_unscaled).value
-        return np.ceil(nt).astype(int)
 
     def ntint(self, nchan):
         """
@@ -331,7 +304,7 @@ class LOFARdata(multifile):
         nchan is the same
         """
         assert(nchan == self.nchan)
-        return self.recsize // (4 * self.nchan)
+        return self.setsize
 
     def read(self, size):
         """
@@ -339,9 +312,9 @@ class LOFARdata(multifile):
         returns a tuple from the two polarizations
         """
         z1 = np.zeros(size, dtype='i1')
-        self.fh1.Iread([z1, MPI.BYTE])
+        self.fh_raw[0].Iread([z1, MPI.BYTE])
         z2 = np.zeros(size, dtype='i1')
-        self.fh2.Iread([z2, MPI.BYTE])
+        self.fh_raw[1].Iread([z2, MPI.BYTE])
         return z1, z2
 
     def record_read(self, count):
@@ -349,40 +322,35 @@ class LOFARdata(multifile):
         read 'count' records of data,
         returned as a complex number
         """
-        raw = [np.fromstring(r, dtype=self.dtype,
-                             count=count).reshape(-1, self.nchan)
-               for r in self.read(count * self.itemsize)]
+        raw = [np.fromstring(r, dtype=self.dtype).reshape(-1, self.nchan)
+               for r in self.read(count * self.nchan * self.itemsize)]
         return raw[0] + 1j*raw[1]
 
     def seek(self, offset):
-        self.fh1.Seek(offset)
-        self.fh2.Seek(offset)
+        for fh in self.fh_raw:
+            fh.Seek(offset * self.itemsize * self.nchan)
 
     def __repr__(self):
-        return ("<open lofar polarization pair {} and {}>"
-                .format(os.path.basename(self.fname1),
-                        os.path.basename(self.fname2)))
+        return ("<open lofar polarization pair {}>"
+                .format(self.fh_raw))
 
 
-class LOFARdata_Pcombined(multifile):
+class LOFARdata_Pcombined(MultiFile):
     """
     convenience class to combine multiple subbands, making them act
     as a single file.
 
     """
+    telescope = 'lofar'
+    samplerate = 200.*u.MHz
+
     def __init__(self, filelist, comm=None):
         """
         A list of tuples, to be 'concatenated' together
         (as returned by observations.obsdata[telescope].file_list(obskey) )
         """
-        self.telescope = 'lofar'
-        if comm is None:
-            self.comm = MPI.COMM_SELF
-        else:
-            self.comm = comm
+        super(LOFARdata_Pcombined, self).__init__(comm=comm)
         self.filelist = filelist
-        super(LOFARdata_Pcombined, self).__init__(hdus=['SUBINT'])
-        self.set_hdu_defaults(_LOFAR_defs)
 
         self.fh_subbands = []
         for filetuple in filelist:
@@ -390,7 +358,7 @@ class LOFARdata_Pcombined(multifile):
 
         # make sure basic properties of the files are the same
         for prop in ['dtype', 'setsize', 'time0', 'samplerate',
-                     'fwidth', 'nchan']:
+                     'fwidth', 'dtsample', 'nchan']:
             props = [fh.__dict__[prop] for fh in self.fh_subbands]
             if prop == 'time0':
                 props = [p.isot for p in props]
@@ -399,9 +367,7 @@ class LOFARdata_Pcombined(multifile):
 
         self.recsize = sum([fh.recsize for fh in self.fh_subbands])
 
-        self.itemsize = _bytes_per_sample.get(self.dtype, None)
-        if self.itemsize is None:
-            self.itemsize = np.dtype(self.dtype).itemsize
+        self.itemsize = bytes_per_sample(self.dtype)
 
         freqs = np.concatenate([fh.freqs.to(u.MHz).value
                                 for fh in self.fh_subbands])*u.MHz
@@ -413,45 +379,13 @@ class LOFARdata_Pcombined(multifile):
         self.fedge_at_top = False
         # update some of the hdu data
         self['PRIMARY'].header['DATE-OBS'] = self.time0.isot
-        self['PRIMARY'].header.update('TBIN', (1./samplerate).to('s').value)
+        self['PRIMARY'].header.update('TBIN',
+                                      (1./self.samplerate).to('s').value)
         self['PRIMARY'].header.update('NCHAN', self.nchan)
 
     def close(self):
         for fh in self.fh_subbands:
             fh.close()
-
-    def nskip(self, date, time0=None):
-        """
-        return the number of records needed to skip from start of
-        file to iso timestamp 'date'.
-
-        Optionally:
-        time0 : use this start time instead of self.time0
-                either a astropy.time.Time object or string in 'utc'
-
-        """
-        if time0 is None:
-            time0 = self.time0
-        elif isinstance(time0, str):
-            time0 = Time(time0, scale='utc')
-
-        dt = (Time(date, scale='utc')-time0)
-        nskip = int(round((dt/(self.ntint(None) / self.fwidth))
-                          .to(u.dimensionless_unscaled)))
-        return nskip
-
-    def ntimebins(self, t0, t1):
-        """
-        determine the number of timebins between UTC start time 't0'
-        and end time 't1'
-        """
-        if isinstance(t0, str):
-            t0 = Time(t0, scale='utc')
-        if isinstance(t1, str):
-            t1 = Time(t1, scale='utc')
-        nt = ((t1-t0) * self.fwidth /
-              (self.setsize)).to(u.dimensionless_unscaled).value
-        return np.ceil(nt).astype(int)
 
     def ntint(self, *args):
         """
@@ -460,94 +394,57 @@ class LOFARdata_Pcombined(multifile):
         nchan is the same
         """
         # LOFAR is already channelized, we accept args for generalization
-        return self.recsize // (4 * self.nchan)
-
-    def read(self, size):
-        # we don't actually use this
-        z1s = []
-        z2s = []
-        for fh in self.fh_subbands:
-            frac_size = (size*fh.nchan) // self.nchan
-            # self.nchan = \sum fh(nchan)
-            if (size * fh.nchan) % self.nchan != 0:
-                raise Warning('Read error in (combined) Lofar record_read')
-            z1, z2 = fh.read(frac_size)
-            z1s.append(z1)
-            z2s.append(z2)
-        return np.concatenate(z1s), np.concatenate(z2s)
+        return self.setsize
 
     def record_read(self, size):
-        recs = []
-        for fh in self.fh_subbands:
-            frac_size = (size*fh.nchan) // self.nchan
-            # self.nchan = \sum fh(nchan)
-            if (size * fh.nchan) % self.nchan != 0:
-                raise Warning('Read error in (combined) Lofar record_read')
-            recs.append(fh.record_read(frac_size))
-        return np.hstack(recs)
+        return np.hstack([fh.record_read(size) for fh in self.fh_subbands])
 
     def seek(self, offset):
         for fh in self.fh_subbands:
-            frac_offset = (offset*fh.nchan) // self.nchan
-            if (offset * fh.nchan) % self.nchan != 0:
-                raise Warning('Read error in (combined) Lofar seek')
-            fh.seek(frac_offset)
+            fh.seek(offset)
 
     def seek_record_read(self, offset, size):
         """
         LOFARdata_Pcombined class opens a lot of filehandles.
         This routine tries to minimize file seeks
         """
-        recs = []
-        for fh in self.fh_subbands:
-            frac_offset = (offset*fh.nchan) // self.nchan
-            if (offset * fh.nchan) % self.nchan != 0:
-                raise Warning('Read error in (combined) Lofar seek')
-            fh.seek(frac_offset)
-
-            frac_size = (size*fh.nchan) // self.nchan
-            # self.nchan = \sum fh(nchan)
-            if (size * fh.nchan) % self.nchan != 0:
-                raise Warning('Read error in (combined) Lofar record_read')
-            recs.append(fh.record_read(frac_size))
-        return np.hstack(recs)
+        return np.hstack([fh.seek_record_read(offset, size)
+                          for fh in self.fh_subbands])
 
     def __repr__(self):
         return ("<open (concatenated) lofar polarization pair from {} to {}>"
-                .format(os.path.basename(self.fh_subbands[0].fname1),
-                        os.path.basename(self.fh_subbands[-1].fname2)))
+                .format(self.fh_subbands[0].fh_raw[0],
+                        self.fh_subbands[-1].fh_raw[-1]))
 
 # LOFAR defaults for psrfits HDUs
-_LOFAR_defs = {}
-_LOFAR_defs['PRIMARY'] = {'TELESCOP':'LOFAR',
-                          'IBEAM':1, 'FD_POLN':'LIN',
-                          'OBS_MODE':'SEARCH',
-                          'ANT_X':0, 'ANT_Y':0, 'ANT_Z':0, 'NRCVR':1,
-                          'FD_HAND':1, 'FD_SANG':0, 'FD_XYPH':0,
-                          'BE_PHASE':0, 'BE_DCC':0, 'BE_DELAY':0,
-                          'TRK_MODE':'TRACK',
-                          'TCYCLE':0, 'OBSFREQ':300, 'OBSBW':100,
-                          'OBSNCHAN':20, 'CHAN_DM':0,
-                          'EQUINOX':2000.0, 'BMAJ':1, 'BMIN':1, 'BPA':0,
-                          'SCANLEN':1, 'FA_REQ':0,
-                          'CAL_FREQ':0, 'CAL_DCYC':0,
-                          'CAL_PHS':0, 'CAL_NPHS':0,
-                          'STT_IMJD':54000, 'STT_SMJD':0, 'STT_OFFS':0}
-samplerate = 200. * u.MHz
-_LOFAR_defs['SUBINT'] = {'INT_TYPE': 'TIME',
-                         'SCALE': 'FluxDen',
-                         'POL_TYPE': 'AABB',
-                         'NPOL':1,
-                         'TBIN':(1./samplerate).to('s').value,
-                         'NBIN':1, 'NBIN_PRD':1,
-                         'PHS_OFFS':0,
-                         'NBITS':1,
-                         'ZERO_OFF':0, 'SIGNINT':0,
-                         'NSUBOFFS':0,
-                         'NCHAN':1,
-                         'CHAN_BW':1,
-                         'DM':0, 'RM':0, 'NCHNOFFS':0,
-                         'NSBLK':1}
+_defaults['lofar'] = {
+    'PRIMARY': {'TELESCOP':'LOFAR',
+                'IBEAM':1, 'FD_POLN':'LIN',
+                'OBS_MODE':'SEARCH',
+                'ANT_X':0, 'ANT_Y':0, 'ANT_Z':0, 'NRCVR':1,
+                'FD_HAND':1, 'FD_SANG':0, 'FD_XYPH':0,
+                'BE_PHASE':0, 'BE_DCC':0, 'BE_DELAY':0,
+                'TRK_MODE':'TRACK',
+                'TCYCLE':0, 'OBSFREQ':300, 'OBSBW':100,
+                'OBSNCHAN':20, 'CHAN_DM':0,
+                'EQUINOX':2000.0, 'BMAJ':1, 'BMIN':1, 'BPA':0,
+                'SCANLEN':1, 'FA_REQ':0,
+                'CAL_FREQ':0, 'CAL_DCYC':0,
+                'CAL_PHS':0, 'CAL_NPHS':0,
+                'STT_IMJD':54000, 'STT_SMJD':0, 'STT_OFFS':0},
+    'SUBINT': {'INT_TYPE': 'TIME',
+               'SCALE': 'FluxDen',
+               'POL_TYPE': 'AABB',
+               'NPOL':1,
+               'NBIN':1, 'NBIN_PRD':1,
+               'PHS_OFFS':0,
+               'NBITS':1,
+               'ZERO_OFF':0, 'SIGNINT':0,
+               'NSUBOFFS':0,
+               'NCHAN':1,
+               'CHAN_BW':1,
+               'DM':0, 'RM':0, 'NCHNOFFS':0,
+               'NSBLK':1}}
 
 
 #    ____  ___ ___  ____  ______
@@ -558,98 +455,42 @@ _LOFAR_defs['SUBINT'] = {'INT_TYPE': 'TIME',
 #  |     ||   |   ||  .  \ |  |
 #  |___,_||___|___||__|\_| |__|
 #
-class GMRTdata(multifile):
-    def __init__(self, timestamp_file, files, setsize=2**22,
-                 utc_offset=TimeDelta(5.5*3600, format='sec'), comm=None):
-        super(GMRTdata, self).__init__(hdus=['SUBINT'])
-        self.set_hdu_defaults(_GMRT_defs)
+class GMRTdata(MultiFile):
 
-        self.telescope = 'gmrt'
-        if comm is None:
-            self.comm = MPI.COMM_SELF
-        else:
-            self.comm = comm
+    telescope = 'gmrt'
 
-        self.timestamp_file = timestamp_file
-        self.indices, self.timestamps, self.gsb_start = read_timestamp_file(
-            timestamp_file, utc_offset)
-        self.fh_raw = [MPI.File.Open(self.comm, raw,
-                                     amode=MPI.MODE_RDONLY) for raw in files]
-        self.setsize = setsize
-        self.recsize = setsize
-        self.index = 0
+    def __init__(self, timestamp_file, raw_files, setsize=2**12, dtype='ci1',
+                 utc_offset=5.5*u.hr,
+                 samplerate=100./3.*u.MHz, fedge=156.*u.MHz,
+                 fedge_at_top=True, nchan=512, comm=None):
+        # GMRT phased data stored in 4 MiB blocks with 2Mi complex samples
+        # split in 512 channels
+        super(GMRTdata, self).__init__(raw_files, comm=comm)
 
         # parameters for fold:
-        self.samplerate = 100.*u.MHz / 3.
-        self.fedge = 156. * u.MHz
-        self.fedge_at_top = True
+        self.setsize = setsize
+        # ci1 is special complex type, made of two signed int8s.
+        self.dtype = dtype
+        self.samplerate = samplerate
+        self.fedge = fedge
+        self.fedge_at_top = fedge_at_top
+        self.nchan = nchan
+
+        self.timestamp_file = timestamp_file
+        self.index = 0
+
+        self.indices, self.timestamps, self.gsb_start = read_timestamp_file(
+            timestamp_file, utc_offset)
         self.time0 = self.timestamps[0]
         # GMRT time is off by one 32MB record
-        self.time0 -= (2.**24/(100*u.MHz/6.)).to(u.s)
-        self.dtype = np.int8
-        self.itemsize = {np.int8: 2}[self.dtype]
+        self.time0 -= (2.**25/samplerate).to(u.s)
 
-    def close(self):
-        for fh in self.fh_raw:
-            fh.Close()
-
-    def nskip(self, date, time0=None):
-        """
-        return the number of records needed to skip from start of
-        file to iso timestamp 'date'.
-
-        Optionally:
-        time0 : use this start time instead of self.time0
-                either a astropy.time.Time object or string in 'utc'
-
-        """
-        if time0 is None:
-            time0 = self.time0
-        elif isinstance(time0, str):
-            time0 = Time(time0, scale='utc')
-
-        dt = (Time(date, scale='utc')-time0)
-        nskip = int(round((dt * self.samplerate / self.recsize)
-                          .to(u.dimensionless_unscaled)))
-        return nskip
-
-    def ntimebins(self, t0, t1):
-        """
-        determine the number of timebins between UTC start time 't0'
-        and end time 't1'
-        """
-        if isinstance(t0, str):
-            t0 = Time(t0, scale='utc')
-        if isinstance(t1, str):
-            t1 = Time(t1, scale='utc')
-        nt = ((t1-t0) * self.samplerate /
-              (self.recsize)).to(u.dimensionless_unscaled).value
-        return np.ceil(nt).astype(int)
+        self.itemsize = bytes_per_sample(self.dtype)
+        self.recsize = setsize * self.itemsize * self.nchan
+        self.dtsample = (nchan * 2 / samplerate).to(u.s)
 
     def ntint(self, nchan):
-        return self.setsize // (2*nchan)
-
-    def record_read(self, count):
-        return fromfile(self, self.dtype, count*self.itemsize)
-
-    def read(self, size):
-        assert size == self.recsize
-        if self.index == len(self.indices):
-            raise EOFError
-        self.index += 1
-        # print('reading from {}, t={}'.format(
-        #     self.fh_raw[self.indices[self.index-1]],
-        #     self.timestamps[self.index-1]))
-        z = np.zeros(size, dtype='i1')
-        self.fh_raw[self.indices[self.index-1]].Iread(z)
-        return z
-
-    def seek(self, offset):
-        assert offset % self.recsize == 0
-        self.index = offset // self.recsize
-        for i, fh in enumerate(self.fh_raw):
-            fh.Seek(np.count_nonzero(self.indices[:self.index] == i) *
-                    self.recsize)
+        return self.setsize
 
     @property
     def time(self):
@@ -663,35 +504,33 @@ class GMRTdata(multifile):
 
 # GMRT defaults for psrfits HDUs
 # Note: these are largely made-up at this point
-_GMRT_defs = {}
-_GMRT_defs['PRIMARY'] = {'TELESCOP':'GMRT',
-                         'IBEAM':1, 'FD_POLN':'LIN',
-                         'OBS_MODE':'SEARCH',
-                         'ANT_X':0, 'ANT_Y':0, 'ANT_Z':0, 'NRCVR':1,
-                         'FD_HAND':1, 'FD_SANG':0, 'FD_XYPH':0,
-                         'BE_PHASE':0, 'BE_DCC':0, 'BE_DELAY':0,
-                         'TRK_MODE':'TRACK',
-                         'TCYCLE':0, 'OBSFREQ':300, 'OBSBW':100,
-                         'OBSNCHAN':0, 'CHAN_DM':0,
-                         'EQUINOX':2000.0, 'BMAJ':1, 'BMIN':1, 'BPA':0,
-                         'SCANLEN':1, 'FA_REQ':0,
-                         'CAL_FREQ':0, 'CAL_DCYC':0, 'CAL_PHS':0, 'CAL_NPHS':0,
-                         'STT_IMJD':54000, 'STT_SMJD':0, 'STT_OFFS':0}
-samplerate = 100. * u.MHz / 3.
-_GMRT_defs['SUBINT'] = {'INT_TYPE': 'TIME',
-                        'SCALE': 'FluxDen',
-                        'POL_TYPE': 'AABB',
-                        'NPOL':1,
-                        'TBIN':(1./samplerate).to('s').value,
-                        'NBIN':1, 'NBIN_PRD':1,
-                        'PHS_OFFS':0,
-                        'NBITS':1,
-                        'ZERO_OFF':0, 'SIGNINT':0,
-                        'NSUBOFFS':0,
-                        'NCHAN':1,
-                        'CHAN_BW':1,
-                        'DM':0, 'RM':0, 'NCHNOFFS':0,
-                        'NSBLK':1}
+_defaults['gmrt'] = {
+    'PRIMARY': {'TELESCOP':'GMRT',
+                'IBEAM':1, 'FD_POLN':'LIN',
+                'OBS_MODE':'SEARCH',
+                'ANT_X':0, 'ANT_Y':0, 'ANT_Z':0, 'NRCVR':1,
+                'FD_HAND':1, 'FD_SANG':0, 'FD_XYPH':0,
+                'BE_PHASE':0, 'BE_DCC':0, 'BE_DELAY':0,
+                'TRK_MODE':'TRACK',
+                'TCYCLE':0, 'OBSFREQ':300, 'OBSBW':100,
+                'OBSNCHAN':0, 'CHAN_DM':0,
+                'EQUINOX':2000.0, 'BMAJ':1, 'BMIN':1, 'BPA':0,
+                'SCANLEN':1, 'FA_REQ':0,
+                'CAL_FREQ':0, 'CAL_DCYC':0, 'CAL_PHS':0, 'CAL_NPHS':0,
+                'STT_IMJD':54000, 'STT_SMJD':0, 'STT_OFFS':0},
+    'SUBINT': {'INT_TYPE': 'TIME',
+               'SCALE': 'FluxDen',
+               'POL_TYPE': 'AABB',
+               'NPOL':1,
+               'NBIN':1, 'NBIN_PRD':1,
+               'PHS_OFFS':0,
+               'NBITS':1,
+               'ZERO_OFF':0, 'SIGNINT':0,
+               'NSUBOFFS':0,
+               'NCHAN':1,
+               'CHAN_BW':1,
+               'DM':0, 'RM':0, 'NCHNOFFS':0,
+               'NSBLK':1}}
 
 
 def read_timestamp_file(filename, utc_offset):
