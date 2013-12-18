@@ -15,15 +15,17 @@ from observations import obsdata
 
 from mpi4py import MPI
 
-MAX_RMS = 4.2
+MAX_RMS = 4.
 _fref = 150. * u.MHz  # ref. freq. for dispersion measure
 
 
 def rfi_filter_raw(raw, nchan):
     # note this should accomodate all data (including's lofar raw = complex)
     rawbins = raw.reshape(-1, 2**11*nchan)  # note, this is view!
-    rawbins *= (rawbins.std(-1, keepdims=True) < MAX_RMS)
-    return raw
+    std = rawbins.std(-1, keepdims=True)
+    ok = std < MAX_RMS
+    rawbins *= ok
+    return raw, ok
 
 
 def rfi_filter_power(power):
@@ -100,7 +102,7 @@ def reduce(telescope, obsdate, tstart, tend, nchan, ngate, ntbin,
         waterfall = np.zeros_like(mywaterfall)
         comm.Reduce(mywaterfall, waterfall, op=MPI.SUM, root=0)
         if comm.rank == 0:
-            waterfall = normalize_counts(waterfall)
+            # waterfall = normalize_counts(waterfall)
             np.save("{0}waterfall_{1}+{2:08}sec.npy"
                     .format(savepref, tstart, dt.sec), waterfall)
 
@@ -198,10 +200,10 @@ def CL_parser():
         "Recall observations.conf stores the observation "
         "runs keyed by telescope and date.")
     d_parser.add_argument(
-        '-t0', '--starttime', type=str, default='2013-07-25T22:25:04.767',
+        '-t0', '--starttime', type=str, default='2013-07-25T22:25:01.0',
         help="Timestamp within the observation run to start processing.")
     d_parser.add_argument(
-        '-t1', '--endtime', type=str, default='2013-07-25T22:25:19.767',
+        '-t1', '--endtime', type=str, default='2013-07-25T22:25:12.0',
         help="Timestamp within the observation run to end processing "
         "(replaces the 'nt' argument).")
     d_parser.add_argument(
@@ -221,7 +223,7 @@ def CL_parser():
     # f_parser.add_argument('-nt', '--nt', type=int, default=1800,
     #   help="number of time bins to fold the data into. ")
     f_parser.add_argument(
-        '-nb', '--ntbin', type=int, default=12,
+        '-nb', '--ntbin', type=int, default=3,
         help="number of time bins the time series is split into for folding.")
 
     w_parser = parser.add_argument_group("Waterfall related parameters")
@@ -271,6 +273,7 @@ if __name__ == '__main__':
     elif args.reduction_defaults == 'aro':
         # do nothing, args are already set to aro.py defaults
         args.verbose += 1
+        args.rfi_filter_raw = rfi_filter_raw
 
     elif args.reduction_defaults == 'gmrt':
         args.telescope = 'gmrt'

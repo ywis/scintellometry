@@ -206,9 +206,10 @@ def fold(fh, comm, samplerate, fedge, fedge_at_top, nchan,
             print("Read {} items".format(raw.size), end="")
 
         if rfi_filter_raw is not None:
-            raw = rfi_filter_raw(raw, nchan)
+            raw, ok = rfi_filter_raw(raw, nchan)
             if verbose >= 2:
-                print("... raw RFI", end="")
+                print("... raw RFI (zap {0}/{1})"
+                      .format(np.count_nonzero(~ok), ok.size), end="")
 
         if fh.telescope == 'lofar':
             vals = raw

@@ -73,6 +73,8 @@ class AROdata(multifile):
             # convert time to UTC; dates given in EDT
             self.time0 = Time(isot, scale='utc') + 4*u.hr
             self['PRIMARY'].header['DATE-OBS'] = self.time0.iso
+            # ARO time is off by two 32MiB record or 64Misamples
+            self.time0 -= (2.**27/(200.*u.MHz)).to(u.s)
         else:
             self.time0 = None
         # MPI.File.Open doesn't handle files with ":"
