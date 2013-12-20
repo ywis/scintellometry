@@ -79,15 +79,15 @@ def reduce(telescope, obsdate, tstart, tend, nchan, ngate, ntbin,
         if verbose and comm.rank == 0:
             print("Using start time {0} and phase polynomial {1}"
                   .format(time0, phasepol))
-            print("Skipping {0} records and folding {1} records to cover "
+            print("Skipping {0} blocks and folding {1} blocks to cover "
                   "time span {2} to {3}"
                   .format(nskip, nt, tstart, tend))
-
+        fh.seek(nskip * fh.blocksize)
         # set the default parameters to fold
         # Note, some parameters may be in fh's HDUs, or fh.__getitem__
         # but these are overwritten if explicitly sprecified in Folder
         folder = Folder(fh, nchan=nchan,
-                        nt=nt, ntint=ntint, nskip=nskip, ngate=ngate,
+                        nt=nt, ntint=ntint, ngate=ngate,
                         ntbin=ntbin, ntw=ntw, dm=dm, fref=fref,
                         phasepol=phasepol, dedisperse=dedisperse,
                         do_waterfall=do_waterfall, do_foldspec=do_foldspec,

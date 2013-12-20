@@ -10,27 +10,28 @@ try:
     import pyfftw
     pyfftw.interfaces.cache.enable()
     from pyfftw.interfaces.scipy_fftpack import (rfft, rfftfreq, irfft,
-                                                 fft, ifft, fftfreq, fftshift)
+                                                 fft, ifft, fftfreq)
     _fftargs = {'threads': os.environ.get('OMP_NUM_THREADS', 2),
                 'planner_effort': 'FFTW_ESTIMATE'}
 except(ImportError):
     print("Consider installing pyfftw: https://github.com/hgomersall/pyFFTW")
     # use FFT from scipy, since unlike numpy it does not cast up to complex128
-    from scipy.fftpack import (rfft, rfftfreq, irfft, fft,
-                               ifft, fftfreq, fftshift)
+    from scipy.fftpack import rfft, rfftfreq, irfft, fft, ifft, fftfreq
     _fftargs = {}
 
 dispersion_delay_constant = 4149. * u.s * u.MHz**2 * u.cm**3 / u.pc
 
 
 def fold(fh, comm, samplerate, fedge, fedge_at_top, nchan,
-         nt, ntint, nskip, ngate, ntbin, ntw, dm, fref, phasepol,
+         nt, ntint, ngate, ntbin, ntw, dm, fref, phasepol,
          dedisperse='incoherent',
          do_waterfall=True, do_foldspec=True, verbose=True,
          progress_interval=100, rfi_filter_raw=None, rfi_filter_power=None,
          return_fits=True):
     """
     FFT data, fold by phase/time and make a waterfall series
+
+    Folding is done from the position the file is currently in
 
     Parameters
     ----------
@@ -50,8 +51,6 @@ def fold(fh, comm, samplerate, fedge, fedge_at_top, nchan,
         total number nt of sets, each containing ntint samples in each file
         hence, total # of samples is nt*ntint, with each sample containing
         a single polarisation
-    nskip : int
-        number of records (ntint * nchan * 2 / 2 bytes) to skip
     ngate, ntbin : int
         number of phase and time bins to use for folded spectrum
         ntbin should be an integer fraction of nt
@@ -92,16 +91,14 @@ def fold(fh, comm, samplerate, fedge, fedge_at_top, nchan,
     nwsize = nt*ntint//ntw
     waterfall = np.zeros((nchan, nwsize))
 
-    # number of samples per record (real/imag counted separately)
-    setsize = fh.setsize
-
     if verbose and rank == 0:
         print('Reading from {}'.format(fh))
 
+    nskip = fh.tell()/fh.blocksize
     if nskip > 0:
         if verbose and rank == 0:
-            print('Skipping {0} records = {1} bytes'
-                  .format(nskip, nskip*fh.recsize))
+            print('Starting {0} blocks = {1} bytes out from start.'
+                  .format(nskip, nskip*fh.blocksize))
 
     dt1 = (1./fh.samplerate).to(u.s)
     # need 2*nchan real-valued samples for each FFT
@@ -112,20 +109,20 @@ def fold(fh, comm, samplerate, fedge, fedge_at_top, nchan,
     tstart = dtsample * ntint * nskip
 
     # set up FFT functions: real vs complex fft's
-    if fh.telescope == 'aro':
-        thisfft = rfft
-        thisifft = irfft
-        thisfftfreq = rfftfreq
-    else:
+    if fh.nchan > 1:
         thisfft = fft
         thisifft = ifft
         thisfftfreq = fftfreq
+    else:
+        thisfft = rfft
+        thisifft = irfft
+        thisfftfreq = rfftfreq
 
     # pre-calculate time delay due to dispersion in coarse channels
     # LOFAR data is already channelized
-    if fh.telescope == 'lofar':
-        freq = fh.freqs
-    elif fh.telescope == 'aro':
+    if fh.nchan > 1:
+        freq = fh.frequencies
+    else:
         if fedge_at_top:
             freq = fedge - thisfftfreq(nchan*2, dt1.value) * u.Hz
         else:
@@ -135,19 +132,13 @@ def fold(fh, comm, samplerate, fedge, fedge_at_top, nchan,
         # [::2] sets frequency channels to numerical recipes ordering
         # or, rfft has an unusual ordering
         freq = freq[::2]
-    elif fh.telescope == 'gmrt':
-        freq = fftshift(fftfreq(nchan, 2.*dt1.value)) * u.Hz
-        if fedge_at_top:
-            freq = fedge - (freq-freq[0])
-        else:
-            freq = fedge + (freq-freq[0])
 
     dt = (dispersion_delay_constant * dm *
           (1./freq**2 - 1./fref**2)).to(u.s).value
 
     if dedisperse in ['coherent', 'by-channel']:
         # pre-calculate required turns due to dispersion
-        if fh.telescope == 'lofar':
+        if fh.nchan > 1:
             fcoh = (freq[np.newaxis,:] +
                     fftfreq(ntint, dtsample.value)[:,np.newaxis] * u.Hz)
         else:
@@ -167,13 +158,14 @@ def fold(fh, comm, samplerate, fedge, fedge_at_top, nchan,
         dang = (dispersion_delay_constant * dm * fcoh *
                 (1./_fref-1./fcoh)**2) * 360. * u.deg
 
-        if fh.telescope == 'aro':
+        if thisfftfreq is rfftfreq:
             # order of frequencies is r[0], r[1],i[1],...r[n-1],i[n-1],r[n]
             # for 0 and n need only real part, but for 1...n-1 need real, imag
             # so just get shifts for r[1], r[2], ..., r[n-1]
             dang = dang.to(u.rad).value[1:-1:2]
         else:
             dang = dang.to(u.rad).value
+
         dd_coh = np.exp(dang * 1j).conj().astype(np.complex64)
 
     for j in xrange(rank, nt, size):
@@ -188,7 +180,7 @@ def fold(fh, comm, samplerate, fedge, fedge_at_top, nchan,
             # LOFAR returns complex64 (count/nchan, nchan)
             # LOFAR "combined" file class can do lots of seeks, we minimize
             # that with the 'seek_record_read' routine
-            raw = fh.seek_record_read((nskip+j)*setsize, setsize)
+            raw = fh.seek_record_read((nskip+j)*fh.blocksize, fh.blocksize)
         except(EOFError, IOError) as exc:
             print("Hit {0!r}; writing pgm's".format(exc))
             break
@@ -210,7 +202,7 @@ def fold(fh, comm, samplerate, fedge, fedge_at_top, nchan,
         # for lofar and gmrt-phased
         if dedisperse in ['coherent', 'by-channel']:
             fine = thisfft(vals, axis=0, overwrite_x=True, **_fftargs)
-            if fh.telescope == 'aro':
+            if thisfft is rfft:
                 fine_cmplx = fine[1:-1].view(np.complex64)
                 fine_cmplx *= dd_coh  # overwrites parts of fine, as intended
             else:
@@ -220,7 +212,7 @@ def fold(fh, comm, samplerate, fedge, fedge_at_top, nchan,
             if verbose >= 2:
                 print("... dedispersed", end="")
 
-        if fh.telescope == 'aro':
+        if fh.nchan == 1:
             chan2 = thisfft(vals.reshape(-1, nchan*2), axis=-1,
                             overwrite_x=True, **_fftargs)**2
             # rfft: Re[0], Re[1], Im[1], ..., Re[n/2-1], Im[n/2-1], Re[n/2]

@@ -6,6 +6,7 @@ import numpy as np
 import os
 import re
 
+from scipy.fftpack import fftfreq, fftshift
 from astropy import units as u
 from astropy.time import Time, TimeDelta
 from fromfile import fromfile
@@ -19,7 +20,7 @@ from psrfits_tools import psrFITS
 
 # size in bytes of records read from file (simple for ARO: 1 byte/sample)
 # double since we need to get ntint samples after FFT
-def bytes_per_sample(dtype):
+def dtype_itemsize(dtype):
     bps = {'ci1': 2, '4bit': 0.5}.get(dtype, None)
     if bps is None:
         bps = np.dtype(dtype).itemsize
@@ -34,7 +35,7 @@ _lofar_dtypes = {'float': '>c8', 'int8': 'ci1'}
 
 class MultiFile(psrFITS):
 
-    def __init__(self, files=None, recsize=None, dtype=None, nchan=None,
+    def __init__(self, files=None, blocksize=None, dtype=None, nchan=None,
                  comm=None):
         if comm is None:
             self.comm = MPI.COMM_SELF
@@ -43,15 +44,16 @@ class MultiFile(psrFITS):
         if files is not None:
             self.open(files)
         # parameters for fold:
-        if recsize is not None:
-            self.recsize = recsize
+        if blocksize is not None:
+            self.blocksize = blocksize
         if dtype is not None:
             self.dtype = dtype
         if nchan is not None:
             self.nchan = nchan
-        self.itemsize = bytes_per_sample(self.dtype)
-        assert self.recsize % (self.nchan * self.itemsize) == 0
-        self.setsize = int(self.recsize / (self.nchan * self.itemsize))
+        self.itemsize = dtype_itemsize(self.dtype)
+        self.recordsize = self.itemsize * self.nchan
+        assert self.blocksize % self.recordsize == 0
+        self.setsize = int(self.blocksize / self.recordsize)
         super(MultiFile, self).__init__(hdus=['SUBINT'])
         self.set_hdu_defaults(header_defaults[self.telescope])
 
@@ -69,6 +71,7 @@ class MultiFile(psrFITS):
                                              amode=MPI.MODE_RDONLY))
             if islnk:
                 self.fh_links.append(fname)
+        self.offset = 0
 
     def close(self):
         for fh in self.fh_raw:
@@ -77,21 +80,51 @@ class MultiFile(psrFITS):
             if os.path.exists(fh):
                 os.unlink(fh)
 
-    def seek(self, offset):
-        assert offset % self.setsize == 0
-        self.index = offset // self.setsize
-        for i, fh in enumerate(self.fh_raw):
-            fh.Seek(np.count_nonzero(self.indices[:self.index] == i) *
-                    self.recsize)
-
     def read(self, size):
-        assert size == self.recsize
-        if self.index == len(self.indices):
-            raise EOFError('At end of indices in MultiFile.read')
-        self.index += 1
-        z = np.zeros(size, dtype='i1')
-        self.fh_raw[self.indices[self.index-1]].Iread(z)
+        """Read at most size bytes, returning an ndarray with np.int8 dtype.
+        Incorporate information from multiple underlying files if necessary"""
+        if size % self.recordsize != 0:
+            raise ValueError("Cannot read a non-integer number of records")
+
+        # ensure we do not read beyond end
+        size = min(size, len(self.indices) * self.blocksize - self.offset)
+        if size <= 0:
+            raise EOFError('At end of file in MultiFile.read')
+
+        # allocate buffer for MPI read
+        z = np.empty(size, dtype=np.int8)
+        # read one or more pieces
+        iz = 0
+        while(iz < size):
+            block, already_read = divmod(self.offset, self.blocksize)
+            fh_size = min(size - iz, self.blocksize - already_read)
+            fh_index = self.indices[block]
+            if fh_index >= 0:
+                self.fh_raw[fh_index].Iread(z[iz:iz+fh_size])
+            else:
+                z[iz:iz+fh_size] = 0
+            self.offset += fh_size
+            iz += fh_size
+
         return z
+
+    def seek(self, offset):
+        """Move filepointers to given offset, in units of bytes"""
+        if offset % self.recordsize != 0:
+            raise ValueError("Cannot offset to non-integer number of records")
+        # determine index in units of the blocksize
+        block, extra = divmod(offset, self.blocksize)
+        indices = self.indices[:block]
+        fh_offsets = np.bincount(indices[indices >= 0],
+                                 minlength=len(self.fh_raw)) * self.blocksize
+        if self.indices[block] >= 0:
+            fh_offsets[self.indices[block]] += extra
+        for fh, fh_offset in zip(self.fh_raw, fh_offsets):
+            fh.Seek(fh_offset)
+        self.offset = offset
+
+    def tell(self):
+        return self.offset
 
     # ARO and GMRT (LOFAR_Pcombined overwrites this)
     def seek_record_read(self, offset, count):
@@ -101,7 +134,7 @@ class MultiFile(psrFITS):
 
     def record_read(self, count):
         return fromfile(self, self.dtype,
-                        self.recsize).reshape(-1, self.nchan).squeeze()
+                        self.blocksize).reshape(-1, self.nchan).squeeze()
 
     def nskip(self, date, time0=None):
         """
@@ -149,10 +182,10 @@ class AROdata(MultiFile):
 
     telescope = 'aro'
 
-    def __init__(self, sequence_file, raw_voltage_files, recsize=2**25,
+    def __init__(self, sequence_file, raw_voltage_files, blocksize=2**25,
                  dtype='4bit', samplerate=200.*u.MHz, comm=None):
 
-        super(AROdata, self).__init__(raw_voltage_files, recsize, dtype,
+        super(AROdata, self).__init__(raw_voltage_files, blocksize, dtype, 1,
                                       comm=comm)
 
         self.sequence_file = sequence_file
@@ -246,7 +279,7 @@ class LOFARdata(MultiFile):
 
     telescope = 'lofar'
 
-    def __init__(self, raw_files, comm=None, recsize=2**16*20*2*4):
+    def __init__(self, raw_files, comm=None, blocksize=2**16*20*2*4):
         """
         Initialize a lofar observation, tracking/joining the two polarizations.
         We also parse the corresponding HDF5 files to initialize:
@@ -261,18 +294,18 @@ class LOFARdata(MultiFile):
 
         beams = sorted([i for i in s0.keys() if 'BEAM' in i])
         b0 = s0[beams[0]]
-        freqs = (b0['COORDINATES']['COORDINATE_1']
-                 .attrs['AXIS_VALUES_WORLD'] * u.Hz).to(u.MHz)
-        fbottom = freqs[0]
+        frequencies = (b0['COORDINATES']['COORDINATE_1']
+                       .attrs['AXIS_VALUES_WORLD'] * u.Hz).to(u.MHz)
+        fbottom = frequencies[0]
 
         stokes = sorted([i for i in b0.keys()
                          if 'STOKES' in i and 'i2f' not in i])
         st0 = b0[stokes[0]]
         dtype = _lofar_dtypes[st0.attrs['DATATYPE']]
 
-        nchan = len(freqs)  # = st0.attrs['NOF_SUBBANDS']
+        nchan = len(frequencies)  # = st0.attrs['NOF_SUBBANDS']
 
-        # can also get from np.diff(freqs.diff).mean()
+        # can also get from np.diff(frequencies.diff).mean()
         fwidth = (b0.attrs['SUBBAND_WIDTH'] *
                   u.__dict__[b0.attrs['CHANNEL_WIDTH_UNIT']]).to(u.MHz)
 
@@ -280,13 +313,13 @@ class LOFARdata(MultiFile):
                       u.__dict__[b0.attrs['SAMPLING_RATE_UNIT']]).to(u.MHz)
         h0.close()
 
-        super(LOFARdata, self).__init__(raw_files, recsize, dtype, nchan,
+        super(LOFARdata, self).__init__(raw_files, blocksize, dtype, nchan,
                                         comm=comm)
 
         self.time0 = time0
         self.samplerate = samplerate
         self.fwidth = fwidth
-        self.freqs = freqs
+        self.frequencies = frequencies
         self.fedge = fbottom
         self.fedge_at_top = False
         self.dtsample = (1./self.fwidth).to(u.s)
@@ -313,12 +346,15 @@ class LOFARdata(MultiFile):
         for fh, buf in zip(self.fh_raw, z):
             fh.Iread([buf, MPI.BYTE])
         return z.transpose(1, 0, 2).ravel()
+        self.offset += size
 
     def seek(self, offset):
-        """Offset by the given number of samples"""
+        """Offset by the given number of bytes"""
         # half the total number of corresponding bytes in each file
+        assert offset % 2 == 0
         for fh in self.fh_raw:
-            fh.Seek(offset * self.itemsize // 2 * self.nchan)
+            fh.Seek(offset // 2)
+        self.offset = offset
 
     def __repr__(self):
         return ("<open lofar polarization pair {}>"
@@ -329,7 +365,6 @@ class LOFARdata_Pcombined(MultiFile):
     """
     convenience class to combine multiple subbands, making them act
     as a single file.
-
     """
     telescope = 'lofar'
 
@@ -339,8 +374,8 @@ class LOFARdata_Pcombined(MultiFile):
         (as returned by observations.obsdata[telescope].file_list(obskey) )
         """
         super(LOFARdata_Pcombined, self).__init__(raw_files_list, comm=comm)
-        self.fbottom = self.freqs[0]
-        self.fedge = self.freqs[0]
+        self.fbottom = self.frequencies[0]
+        self.fedge = self.frequencies[0]
         self.fedge_at_top = False
         # update some of the hdu data
         self['PRIMARY'].header['DATE-OBS'] = self.time0.isot
@@ -353,7 +388,7 @@ class LOFARdata_Pcombined(MultiFile):
                        for raw_files in raw_files_list]
         self.fh_links = []
         # make sure basic properties of the files are the same
-        for prop in ['dtype', 'itemsize', 'time0', 'samplerate',
+        for prop in ['dtype', 'itemsize', 'recordsize', 'time0', 'samplerate',
                      'fwidth', 'dtsample']:
             props = [fh.__dict__[prop] for fh in self.fh_raw]
             if prop == 'time0':
@@ -361,9 +396,12 @@ class LOFARdata_Pcombined(MultiFile):
             assert len(set(props)) == 1
             self.__setattr__(prop, self.fh_raw[0].__dict__[prop])
 
-        self.recsize = sum([fh.recsize for fh in self.fh_raw])
-        self.freqs = u.Quantity([fh.freqs for fh in self.fh_raw]).ravel()
-        self.nchan = self.freqs.size
+        self.blocksize = sum([fh.blocksize for fh in self.fh_raw])
+        self.recordsize = sum([fh.recordsize for fh in self.fh_raw])
+        self.frequencies = u.Quantity([fh.frequencies
+                                       for fh in self.fh_raw]).ravel()
+        self.nchan = len(self.frequencies)
+        self.offset = 0
 
     def close(self):
         for fh in self.fh_raw:
@@ -379,19 +417,29 @@ class LOFARdata_Pcombined(MultiFile):
         return self.setsize
 
     def record_read(self, size):
-        return np.hstack([fh.record_read(size) for fh in self.fh_raw])
+        assert size % len(self.fh_raw) == 0
+        raw = np.hstack([fh.record_read(size // len(self.fh_raw))
+                         for fh in self.fh_raw])
+        self.offset += size
+        return raw
 
     def seek(self, offset):
+        assert offset % len(self.fh_raw) == 0
         for fh in self.fh_raw:
-            fh.seek(offset)
+            fh.seek(offset // len(self.fh_raw))
+        self.offset = offset
 
     def seek_record_read(self, offset, size):
         """
         LOFARdata_Pcombined class opens a lot of filehandles.
         This routine tries to minimize file seeks
         """
-        return np.hstack([fh.seek_record_read(offset, size)
-                          for fh in self.fh_raw])
+        nfh = len(self.fh_raw)
+        assert offset % nfh == 0 and size % nfh == 0
+        raw = np.hstack([fh.seek_record_read(offset // nfh, size // nfh)
+                         for fh in self.fh_raw])
+        self.offset = offset + size
+        return raw
 
     def __repr__(self):
         return ("<open (concatenated) lofar polarization pair from {} to {}>"
@@ -441,19 +489,24 @@ class GMRTdata(MultiFile):
     telescope = 'gmrt'
 
     def __init__(self, timestamp_file,
-                 raw_files, recsize=2**22, dtype='ci1', nchan=512,
+                 raw_files, blocksize=2**22, dtype='ci1', nchan=512,
                  utc_offset=5.5*u.hr,
                  samplerate=100./3.*u.MHz, fedge=156.*u.MHz,
                  fedge_at_top=True, comm=None):
         # GMRT phased data stored in 4 MiB blocks with 2Mi complex samples
         # split in 512 channels
         # ci1 is special complex type, made of two signed int8s.
-        super(GMRTdata, self).__init__(raw_files, recsize, dtype, nchan,
+        super(GMRTdata, self).__init__(raw_files, blocksize, dtype, nchan,
                                        comm=comm)
 
         self.samplerate = samplerate
         self.fedge = fedge
         self.fedge_at_top = fedge_at_top
+        f = fftshift(fftfreq(nchan, (2./samplerate).to(u.s).value)) * u.Hz
+        if fedge_at_top:
+            self.frequencies = fedge - (f-f[0])
+        else:
+            self.frequencies = fedge + (f-f[0])
 
         self.timestamp_file = timestamp_file
         self.index = 0

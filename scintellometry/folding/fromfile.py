@@ -31,7 +31,13 @@ def fromfile(file, dtype, count, verbose=False):
     if verbose:
         print("Reading {} units of dtype={}".format(count, np_dtype))
     # go via direct read to ensure we can read from gzip'd files
-    raw = np.fromstring(file.read(count), dtype=np_dtype)
+    raw = file.read(count)
+    # but MultiFile returns 1-byte ndarray; viewing much faster than fromstring
+    try:
+        raw = raw.view(dtype=np_dtype)
+    except:
+        raw = np.fromstring(raw, dtype=np_dtype)
+
     if raw.shape[0] != count // np.dtype(np_dtype).itemsize:
         raise EOFError('In fromfile, got {0} items, expected {1}'
                        .format(raw.shape[0],
