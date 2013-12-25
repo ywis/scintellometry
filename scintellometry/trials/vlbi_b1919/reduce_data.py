@@ -75,14 +75,23 @@ def reduce(telescope, obsdate, tstart, tend, nchan, ngate, ntbin,
         tstart = Time(tstart, scale='utc')
         tend = Time(tend, scale='utc')
         dt = tend - tstart
-        nskip = fh.nskip(tstart)    # number of records to skip
+        # nskip = fh.nskip(tstart)    # number of records to skip
+        # fh.seek(nskip * fh.blocksize)
+        # if verbose and comm.rank == 0:
+        #     print("Using start time {0} and phase polynomial {1}"
+        #           .format(time0, phasepol))
+        #     print("Skipping {0} blocks and folding {1} blocks to cover "
+        #           "time span {2} to {3}"
+        #           .format(nskip, nt, tstart, tend))
+
+        fh.seek(tstart)
         if verbose and comm.rank == 0:
             print("Using start time {0} and phase polynomial {1}"
                   .format(time0, phasepol))
             print("Skipping {0} blocks and folding {1} blocks to cover "
                   "time span {2} to {3}"
-                  .format(nskip, nt, tstart, tend))
-        fh.seek(nskip * fh.blocksize)
+                  .format(fh.offset/fh.blocksize, nt, fh.time(),
+                          fh.time(fh.offset + nt*fh.blocksize)))
         # set the default parameters to fold
         # Note, some parameters may be in fh's HDUs, or fh.__getitem__
         # but these are overwritten if explicitly sprecified in Folder
@@ -264,14 +273,15 @@ if __name__ == '__main__':
         args.ngate = 512
         args.date = '2013-07-25'
         args.ntbin = 5
-        args.ntw_min = 10200
+        args.ntw_min = 1020
         args.waterfall = True
         args.verbose += 1
         args.dedisperse = 'incoherent'
         args.rfi_filter_raw = None
 
     elif args.reduction_defaults == 'aro':
-        # do nothing, args are already set to aro.py defaults
+        # do little, most args are already set to aro.py defaults
+        args.ntw_min = 1020
         args.verbose += 1
         args.rfi_filter_raw = rfi_filter_raw
 

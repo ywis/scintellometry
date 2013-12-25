@@ -5,6 +5,7 @@ from __future__ import division
 import numpy as np
 import os
 import re
+import warnings
 
 from scipy.fftpack import fftfreq, fftshift
 from astropy import units as u
@@ -54,6 +55,7 @@ class MultiFile(psrFITS):
         self.recordsize = self.itemsize * self.nchan
         assert self.blocksize % self.recordsize == 0
         self.setsize = int(self.blocksize / self.recordsize)
+
         super(MultiFile, self).__init__(hdus=['SUBINT'])
         self.set_hdu_defaults(header_defaults[self.telescope])
 
@@ -109,7 +111,31 @@ class MultiFile(psrFITS):
         return z
 
     def seek(self, offset):
-        """Move filepointers to given offset, in units of bytes"""
+        """Move filepointers to given offset
+
+        Parameters
+        ----------
+        offset : float, Quantity, TimeDelta, or Time
+            If float, in units of bytes
+            If Quantity in time units or TimeDelta, interpreted as offset from
+                start time, and converted to nearest record
+            If Time, calculate offset from start time and convert
+        """
+        if isinstance(offset, Time):
+            offset = offset-self.time0
+
+        try:
+            offset = offset.to(self.dtsample.unit)
+        except AttributeError:
+            pass
+        except u.UnitsError:
+            offset = offset.to(u.byte).value
+        else:
+            offset = (offset/self.dtsample).to(u.dimensionless_unscaled)
+            offset = int(round(offset)) * self.recordsize
+        self._seek(offset)
+
+    def _seek(self, offset):
         if offset % self.recordsize != 0:
             raise ValueError("Cannot offset to non-integer number of records")
         # determine index in units of the blocksize
@@ -123,8 +149,25 @@ class MultiFile(psrFITS):
             fh.Seek(fh_offset)
         self.offset = offset
 
-    def tell(self):
-        return self.offset
+    def tell(self, unit=None):
+        if unit is None:
+            return self.offset
+
+        if isinstance(unit, str) and unit == 'time':
+            return self.time()
+
+        return (self.offset * u.byte).to(
+            unit, equivalencies=[(u.Unit(self.recordsize * u.byte),
+                                  u.Unit(self.dtsample))])
+
+    def time(self, offset=None):
+        """Get time corresponding to the current (or given) offset"""
+        if offset is None:
+            offset = self.offset
+        if offset % self.recordsize != 0:
+            warnings.warn("Offset for which time is requested is not "
+                          "integer multiple of record size.")
+        return self.time0 + self.tell(u.day)
 
     # ARO and GMRT (LOFAR_Pcombined overwrites this)
     def seek_record_read(self, offset, count):
@@ -185,9 +228,6 @@ class AROdata(MultiFile):
     def __init__(self, sequence_file, raw_voltage_files, blocksize=2**25,
                  dtype='4bit', samplerate=200.*u.MHz, comm=None):
 
-        super(AROdata, self).__init__(raw_voltage_files, blocksize, dtype, 1,
-                                      comm=comm)
-
         self.sequence_file = sequence_file
         seq, indices = np.loadtxt(sequence_file, np.int32, unpack=True)
 
@@ -208,12 +248,13 @@ class AROdata(MultiFile):
         else:
             self.time0 = None
 
-        self.index = 0
-
         self.fedge = 200. * u.MHz
         self.fedge_at_top = True
         self.samplerate = samplerate
         self.dtsample = (1./samplerate).to(u.s)
+
+        super(AROdata, self).__init__(raw_voltage_files, blocksize, dtype, 1,
+                                      comm=comm)
         # update headers for fun
         self['PRIMARY'].header['DATE-OBS'] = self.time0.iso
         self[0].header.update('TBIN', (1./samplerate).to('s').value),
@@ -227,8 +268,8 @@ class AROdata(MultiFile):
 
     def __repr__(self):
         return ("<open MultiFile raw_voltage_files {} "
-                "using sequence file '{}' at index {}>"
-                .format(self.fh_raw, self.sequence_file, self.index))
+                "using sequence file '{}' at offset {}>"
+                .format(self.fh_raw, self.sequence_file, self.offset))
 
 
 header_defaults['aro'] = {
@@ -313,9 +354,6 @@ class LOFARdata(MultiFile):
                       u.__dict__[b0.attrs['SAMPLING_RATE_UNIT']]).to(u.MHz)
         h0.close()
 
-        super(LOFARdata, self).__init__(raw_files, blocksize, dtype, nchan,
-                                        comm=comm)
-
         self.time0 = time0
         self.samplerate = samplerate
         self.fwidth = fwidth
@@ -323,6 +361,9 @@ class LOFARdata(MultiFile):
         self.fedge = fbottom
         self.fedge_at_top = False
         self.dtsample = (1./self.fwidth).to(u.s)
+
+        super(LOFARdata, self).__init__(raw_files, blocksize, dtype, nchan,
+                                        comm=comm)
         # update some of the hdu data
         self['PRIMARY'].header['DATE-OBS'] = self.time0.isot
         self[0].header.update('TBIN', (1./samplerate).to('s').value)
@@ -348,8 +389,10 @@ class LOFARdata(MultiFile):
         return z.transpose(1, 0, 2).ravel()
         self.offset += size
 
-    def seek(self, offset):
+    def _seek(self, offset):
         """Offset by the given number of bytes"""
+        if offset % self.recordsize != 0:
+            raise ValueError("Cannot offset to non-integer number of records")
         # half the total number of corresponding bytes in each file
         assert offset % 2 == 0
         for fh in self.fh_raw:
@@ -423,10 +466,10 @@ class LOFARdata_Pcombined(MultiFile):
         self.offset += size
         return raw
 
-    def seek(self, offset):
+    def _seek(self, offset):
         assert offset % len(self.fh_raw) == 0
         for fh in self.fh_raw:
-            fh.seek(offset // len(self.fh_raw))
+            fh._seek(offset // len(self.fh_raw))
         self.offset = offset
 
     def seek_record_read(self, offset, size):
@@ -496,9 +539,6 @@ class GMRTdata(MultiFile):
         # GMRT phased data stored in 4 MiB blocks with 2Mi complex samples
         # split in 512 channels
         # ci1 is special complex type, made of two signed int8s.
-        super(GMRTdata, self).__init__(raw_files, blocksize, dtype, nchan,
-                                       comm=comm)
-
         self.samplerate = samplerate
         self.fedge = fedge
         self.fedge_at_top = fedge_at_top
@@ -509,7 +549,6 @@ class GMRTdata(MultiFile):
             self.frequencies = fedge + (f-f[0])
 
         self.timestamp_file = timestamp_file
-        self.index = 0
 
         self.indices, self.timestamps, self.gsb_start = read_timestamp_file(
             timestamp_file, utc_offset)
@@ -519,18 +558,17 @@ class GMRTdata(MultiFile):
 
         self.dtsample = (nchan * 2 / samplerate).to(u.s)
 
+        super(GMRTdata, self).__init__(raw_files, blocksize, dtype, nchan,
+                                       comm=comm)
+
     def ntint(self, nchan):
         return self.setsize
-
-    @property
-    def time(self):
-        return self.timestamps[self.index]
 
     def __repr__(self):
         return ("<open two raw_voltage_files {} "
                 "using timestamp file '{}' at index {} (time {})>"
-                .format(self.fh_raw, self.timestamp_file, self.index,
-                        self.timestamps[self.index]))
+                .format(self.fh_raw, self.timestamp_file, self.offset,
+                        self.time()))
 
 # GMRT defaults for psrfits HDUs
 # Note: these are largely made-up at this point
