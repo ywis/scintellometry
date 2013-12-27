@@ -149,14 +149,17 @@ class MultiFile(psrFITS):
             fh.Seek(fh_offset)
         self.offset = offset
 
-    def tell(self, unit=None):
+    def tell(self, offset=None, unit=None):
+        if offset is None:
+            offset = self.offset
+
         if unit is None:
-            return self.offset
+            return offset
 
         if isinstance(unit, str) and unit == 'time':
             return self.time()
 
-        return (self.offset * u.byte).to(
+        return (offset * u.byte).to(
             unit, equivalencies=[(u.Unit(self.recordsize * u.byte),
                                   u.Unit(self.dtsample))])
 
@@ -167,7 +170,7 @@ class MultiFile(psrFITS):
         if offset % self.recordsize != 0:
             warnings.warn("Offset for which time is requested is not "
                           "integer multiple of record size.")
-        return self.time0 + self.tell(u.day)
+        return self.time0 + self.tell(offset, u.day)
 
     # ARO and GMRT (LOFAR_Pcombined overwrites this)
     def seek_record_read(self, offset, count):

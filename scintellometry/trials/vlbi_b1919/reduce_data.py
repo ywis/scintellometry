@@ -75,14 +75,6 @@ def reduce(telescope, obsdate, tstart, tend, nchan, ngate, ntbin,
         tstart = Time(tstart, scale='utc')
         tend = Time(tend, scale='utc')
         dt = tend - tstart
-        # nskip = fh.nskip(tstart)    # number of records to skip
-        # fh.seek(nskip * fh.blocksize)
-        # if verbose and comm.rank == 0:
-        #     print("Using start time {0} and phase polynomial {1}"
-        #           .format(time0, phasepol))
-        #     print("Skipping {0} blocks and folding {1} blocks to cover "
-        #           "time span {2} to {3}"
-        #           .format(nskip, nt, tstart, tend))
 
         fh.seek(tstart)
         if verbose and comm.rank == 0:
