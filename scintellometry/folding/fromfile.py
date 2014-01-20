@@ -7,13 +7,15 @@ shift76543210 = np.array([7,6,5,4,3,2,1,0], np.int8)
 msblsb_bits = np.array([-16, 15], np.int8)
 twopiby256 = 2.*np.pi / 256.
 
-NP_DTYPES = {'1bit': 'i1', '4bit': 'i1', 'nibble': 'i1'}
+NP_DTYPES = {'1bit': 'i1', '4bit': 'i1', 'nibble': 'i1', 'ci1': '2i1'}
 
 
 def fromfile(file, dtype, count, verbose=False):
-    """Read recsize bytes, with type dtype which can be bits.
+    """Read count bytes, with type dtype which can be bits.
 
     Calls np.fromfile but handles some special dtype's:
+    'ci1'  : complex number stored as two signed 1-byte integers
+             returns count/2 np.complex64 samples
     '1bit' : Unfold for 1-bit sampling (LSB first),
              returns 8*count np.int8 samples, with values of +1 or -1
     '4bit' : Unfold for 4-bit sampling (LSB first)
@@ -29,13 +31,22 @@ def fromfile(file, dtype, count, verbose=False):
     if verbose:
         print("Reading {} units of dtype={}".format(count, np_dtype))
     # go via direct read to ensure we can read from gzip'd files
-    raw = np.fromstring(file.read(count * np.dtype(np_dtype).itemsize),
-                        dtype=np_dtype, count=count)
-    if raw.size != count:
-        raise EOFError
+    raw = file.read(count)
+    # but MultiFile returns 1-byte ndarray; viewing much faster than fromstring
+    try:
+        raw = raw.view(dtype=np_dtype)
+    except:
+        raw = np.fromstring(raw, dtype=np_dtype)
+
+    if raw.shape[0] != count // np.dtype(np_dtype).itemsize:
+        raise EOFError('In fromfile, got {0} items, expected {1}'
+                       .format(raw.shape[0],
+                               count // np.dtype(np_dtype).itemsize))
 
     if np_dtype is dtype:
         return raw
+    elif dtype == 'ci1':
+        return raw.astype(np.float32).view(np.complex64).squeeze()
     elif dtype == '1bit':
         # For a given int8 byte containing bits 76543210
         # left_shift(byte[:,np.newaxis], shift76543210):

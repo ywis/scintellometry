@@ -3,7 +3,7 @@ from __future__ import division, print_function
 
 import numpy as np
 import astropy.units as u
-from astropy.coordinates import ICRSCoordinates, Angle, Longitude, Latitude
+from astropy.coordinates import ICRS, Angle, Longitude, Latitude
 from astropy.time import Time, TimeDelta
 
 
@@ -102,7 +102,7 @@ class Observatory(dict):
         return archaversin(hsha).to(u.degree)
 
 
-class BinaryPulsar(ICRSCoordinates):
+class BinaryPulsar(ICRS):
     def __init__(self, *args, **kwargs):
         name = kwargs.pop('name', None)
         super(BinaryPulsar, self).__init__(*args)
@@ -150,7 +150,7 @@ aro = Observatory('-78d04m22.95s', '45d57m19.81s', 'ARO')
 aro.zamax = 82.9*u.deg  # includes feed being offset by 1 degree and
 # being very broad at 200 cm, gaining another degree
 lofar = Observatory('06d52m08.18s', '52d54m31.55s', 'LOFAR')
-lofar.zamax = 60.*u.degree  # guess, gives factor 2 loss in collecting area
+lofar.zamax = 70.*u.degree  # guess, gives factor 2 loss in collecting area
 wsrt = Observatory('06d36m12s', '52d54m53.s', 'WSRT')
 wsrt.hamax = 6.*u.hourangle  # from http://www.astron.nl/radio-observatory/astronomers/wsrt-guide-observations/3-telescope-parameters-and-array-configuration
 effelsberg = Observatory('06d52m58s', '50d31m29s', 'EB')
@@ -190,13 +190,17 @@ crab = BinaryPulsar('05h34m31.973s +22d00m52.06s', name='CRAB')
 
 b2116 = BinaryPulsar('21h13m24.307s +46d44m08.70s', name='B2116')
 
+b0809 = BinaryPulsar('08h14m59.500s +74d29m05.70s', name='B0809')
+
+b1133 = BinaryPulsar('11h36m03.180s +15d51m09.62s', name='B1133')
+
 if __name__ == '__main__':
     print('Source Obs.             HA  LocSidTime UnivSidTime')
-    for src in j1810, b1957, j1012:
+    for src in j1810, b1957, b0809, j1012, b1133:
         gmststart = -100. * u.hourangle
         gmststop = +100. * u.hourangle
-        # for obs in gmrt, lofar, aro:
-        for obs in gbt, ao, wsrt:
+        for obs in gmrt, lofar, aro:
+        # for obs in gbt, ao, wsrt:
             hamax = getattr(obs, 'hamax', None)
             if hamax is None:
                 hamax = obs.za2ha(obs.zamax, src.dec)
@@ -240,8 +244,8 @@ if __name__ == '__main__':
             #ist_date2 = '2013-07-03 12:00:00'
             #ist_date1 = '2013-07-24 12:00:00'
             #ist_date2 = '2013-07-29 12:00:00'
-            ist_date1 = '2014-01-15 12:00:00'
-            ist_date2 = '2014-01-20 12:00:00'
+            ist_date1 = '2014-01-18 12:00:00'
+            ist_date2 = '2014-01-23 12:00:00'
             ist_utc = 5.5/24.
             mjd1 = Time(ist_date1, scale='utc').mjd-ist_utc
             mjd2 = Time(ist_date2, scale='utc').mjd-ist_utc
