@@ -28,8 +28,9 @@ if __name__ == '__main__':
 
     assert psr1 == psr2
     dm = Obs['psrs'][psr1]['dm']
-    print("F", files1)
     with LOFARdata_Pcombined(*files1, comm=comm) as fh1,\
             GMRTdata(*files2, comm=comm) as fh2:
-        correlate.correlate(fh1, fh2, 512, dm=dm, t0='2013-07-25T22:25:01.0',
+        correlate.correlate(fh1, fh2, dm=dm, nchan=512, ngate=512,
+                            ntbin=12, nt=12, ntint=12, ntw=10200,
+                            t0='2013-07-25T22:25:01.0',
                             t1='2013-07-25T22:25:12.0')
