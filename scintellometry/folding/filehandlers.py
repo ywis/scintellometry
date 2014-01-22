@@ -115,7 +115,7 @@ class MultiFile(psrFITS):
 
         Parameters
         ----------
-        offset : float, Quantity, TimeDelta, or Time
+        offset : float, Quantity, TimeDelta, Time, or str (iso-t)
             If float, in units of bytes
             If Quantity in time units or TimeDelta, interpreted as offset from
                 start time, and converted to nearest record
@@ -123,6 +123,8 @@ class MultiFile(psrFITS):
         """
         if isinstance(offset, Time):
             offset = offset-self.time0
+        elif isinstance(offset, str):
+            offset = Time(offset, scale='utc') - self.time0
 
         try:
             offset = offset.to(self.dtsample.unit)
