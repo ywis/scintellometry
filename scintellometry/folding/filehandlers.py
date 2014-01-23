@@ -184,7 +184,7 @@ class MultiFile(psrFITS):
 
     def record_read(self, count):
         return fromfile(self, self.dtype,
-                        self.blocksize).reshape(-1, self.nchan).squeeze()
+                        count).reshape(-1, self.nchan).squeeze()
 
     def nskip(self, date, time0=None):
         """
