@@ -145,6 +145,8 @@ class MultiFile(psrFITS):
         indices = self.indices[:block]
         fh_offsets = np.bincount(indices[indices >= 0],
                                  minlength=len(self.fh_raw)) * self.blocksize
+        if block > len(self.indices):
+            raise EOFError('At end of file in MultiFile.read')
         if self.indices[block] >= 0:
             fh_offsets[self.indices[block]] += extra
         for fh, fh_offset in zip(self.fh_raw, fh_offsets):

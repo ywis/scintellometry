@@ -1,8 +1,10 @@
 from __future__ import division, print_function
 
+from fractions import Fraction
 import numpy as np
 import os
 import astropy.units as u
+from astropy.time import Time
 
 try:
     import pyfftw
@@ -49,25 +51,21 @@ def correlate(fh1, fh2, dm, nchan, ngate, ntbin, nt, ntint, ntw,
     waterfall = np.zeros((nchan, ngate, ntbin))
     nwsize = nt*ntint//ntw
 
+    # find nearest starttime landing on same sample
     if t0 is None:
         t0 = max(fh1.time0, fh2.time0)
         print("Starting at %s" % t0)
-    print("TTT",t0)
+    t0 = Time(t0, scale='utc')
+    print("TTT",t0, type(t0))
     if t1 is None:
         pass
+    t1 = Time(t1, scale='utc')
+
     # configure the fh's for xcorr stream
-
-    for fh in [fh1, fh2]:
+    for i, fh in enumerate([fh1, fh2]):
         fh.seek(t0)
-        fh.nskip = fh.tell()/fh.blocksize
-
-        fh.dt1 = (1./fh.samplerate).to(u.s)
-        if fh.telescope != 'lofar':
-            fh.dtsample = nchan * 2 * fh.dt1
-        # else: lofar already channelized/dtsample-d
+        fh.dt1 = (1. / fh.samplerate).to(u.s)
         fh.this_nskip = fh.nskip(t0)
-        fh.tstart = fh.dtsample * fh.ntint(nchan) * fh.this_nskip
-
         # set up FFT functions: real vs complex fft's
         if fh.nchan > 1:
             fh.thisfft = fft
@@ -98,9 +96,30 @@ def correlate(fh1, fh2, dm, nchan, ngate, ntbin, nt, ntint, ntw,
         fh.dt = (dispersion_delay_constant * dm *
                  ( 1./fh.freq**2 - 1./_fref**2) ).to(u.s).value
 
-    # prep. reshape so we have similar freqs
-    r1 = np.diff(fh1.freq).mean() / np.diff(fh2e.freq).mean()
-    print("r1",r1)
-    print("fh1", fh1.freq.min(), fh1.freq.max(), np.diff(fh1.freq).mean(), fh1.nskip)
-    print("fh2", fh2.freq.min(), fh2.freq.max(), np.diff(fh2.freq).mean(), fh2.nskip)
+    # find the nearest sample that starts at same time
+    sr = Fraction(fh1.dtsample.to(u.s).value * fh1.blocksize / fh1.recordsize)
+    sr /= Fraction(fh2.dtsample.to(u.s).value  * fh2.blocksize / fh2.recordsize)
+    sr = sr.limit_denominator(5000)
+
+    print("0", fh1.time(), fh2.time())
+    print(sr)
+    n = sr.denominator
+    d = sr.numerator
+    print(fh1.blocksize,fh1.dtsample, fh1.recordsize, fh2.blocksize,fh2.dtsample, fh2.recordsize)
+    raw1 = fh1.seek_record_read((fh1.this_nskip + rank) * fh1.blocksize,
+                                (fh1.blocksize*n) )
+    raw2 = fh2.seek_record_read((fh2.this_nskip + rank) * fh2.blocksize,
+                                (fh2.blocksize*d))
+    endread = False
+    idx = 1
+    while (raw1.size > 0) and (raw2.size > 0):
+        print("idx", idx, fh1.time(), fh2.time(), raw1.shape, raw2.shape)
+        raw1 = fh1.seek_record_read((fh1.this_nskip + rank + n*idx)
+                                    * fh1.blocksize, fh1.blocksize * n)
+        raw2 = fh2.seek_record_read((fh2.this_nskip + rank + d*idx)
+                                    * fh2.blocksize, fh2.blocksize * d)
+        print("idx",idx, fh1.time(), fh2.time())
+        idx += 1
+        if idx > 4: break
+
     return foldspec, icount, waterfall
