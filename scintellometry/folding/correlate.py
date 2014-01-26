@@ -25,8 +25,8 @@ _fref = 150. * u.MHz  # ref. freq. for dispersion measure
 
 
 def correlate(fh1, fh2, dm, nchan, ngate, ntbin, nt, ntint, ntw,
-              dedisperse=None, rfi_filter_raw=None, fref=_fref,
-              save_xcorr=True, do_foldspec=False,
+              dedisperse='incoherent', rfi_filter_raw=None, fref=_fref,
+              save_xcorr=True, do_foldspec=1, phasepol=None,
               t0=None, t1=None, comm=None):
     """
     fh1 : file handle of first data stream
@@ -96,6 +96,9 @@ def correlate(fh1, fh2, dm, nchan, ngate, ntbin, nt, ntint, ntw,
 
         fh.dt = (dispersion_delay_constant * dm *
                  ( 1./fh.freq**2 - 1./fref**2) ).to(u.s).value
+        # number of time bins to np.roll the channels for incoherent dedisperse
+        fh.ndt = (fh.dt / fh.dtsample.to(u.s).value)
+        fh.ndt = -1 * np.rint(fh.ndt).astype(np.int)
 
         if dedisperse in ['coherent', 'by-channel']:
             # pre-calculate required turns due to dispersion
@@ -137,13 +140,7 @@ def correlate(fh1, fh2, dm, nchan, ngate, ntbin, nt, ntint, ntw,
     # data-reading params (to help read in same-size time chunks and average
     # onto the same time-and-frequency grids)
     (Rf, Tf, NUf, fkeep, freqs, rows) = data_averaging_coeffs(fh1, fh2)
-     #    (nf1, nf2), (Tnum, Tden), (Fnum, Fden), (f1keep, f2keep),
-     #            (freq1, freq2), (raw1_nrows, raw2_nrows)
-     #    (nf1, nf2, Tnum, Tden, Fnum, Fden, f1keep, f2keep,
-     #     freq1, freq2, nrows1, nrows2) = data_averaging_coeffs(fh1, fh2)
-     #    nrows = int(min(nrows1 * Tden / Tnum, nrows2 * Tnum / Tden))
-    nrows = int(min(rows[0] * Tf[1] / Tf[0],
-                    rows[1] * Tf[0] / Tf[1]))
+    nrows = int(min(rows[0] * Tf[1] / Tf[0], rows[1] * Tf[0] / Tf[1]))
 
     if save_xcorr:
         # output dataset
@@ -166,14 +163,16 @@ def correlate(fh1, fh2, dm, nchan, ngate, ntbin, nt, ntint, ntw,
     # this_nskip moves to 't0', rank is for MPI
     raws = [fh.seek_record_read((fh.this_nskip + rank * Rf[i])
                                * fh.blocksize, fh.blocksize * Rf[i])
-           for i, fh in enumerate([fh1, fh2])]
+            for i, fh in enumerate([fh1, fh2])]
     idx = 0
     endread = False
     while np.all([raw.size > 0 for raw in raws]):
-        #raws = [raw1, raw2]
         vals = raws #[raw1, raw2]
         chans = [None, None]
+        tsample = [None, None]
+
         # prep the data (channelize, dedisperse, ...)
+
         for i, fh in enumerate([fh1, fh2]):
             if rfi_filter_raw is not None:
                 raws[i], ok = rfi_filter_raw(raws[i], nchan)
@@ -202,33 +201,40 @@ def correlate(fh1, fh2, dm, nchan, ngate, ntbin, nt, ntint, ntw,
             else:  # lofar and gmrt-phased are already channelised
                 chans[i] = vals[i]
 
+            # TODO: profile
+            if dedisperse == 'incoherent':
+                #chans[i] = np.roll(chans[i], fh.ndt)
+                for ci, v in enumerate(fh.ndt):
+                    # print("CI",i,ci,v, type(chans[i]), type(chans[i][0,0]))
+                    chans[i][...,ci] = np.roll(chans[i][...,ci], v, axis=0)
+
             # average onto same time grid
             chans[i] = chans[i].reshape(Tf[i], chans[i].shape[0] / Tf[i], -1)\
                       .mean(axis=0)
 
             # average onto same freq grid
             chans[i] = chans[i][..., fkeep[i]]
-            chans[i] = chans[i].reshape(-1, chans[i].shape[1] / NUf[i], NUf[i])\
-                                             .mean(axis=-1)
+            chans[i] = chans[i].reshape(-1, chans[i].shape[1] / NUf[i],
+                                        NUf[i]).mean(axis=-1)
 
-        # current sample positions in stream
-        isr1 = idx * rows[0] + np.arange(rows[0])
-        isr2 = idx * rows[1] + np.arange(rows[1])
-        isr1 = isr1.reshape(-1, Tf[0]).mean(axis=-1)
-        isr2 = isr2.reshape(-2, Tf[1]).mean(axis=-1)
-        tsample1 = (t0 + isr1 * fh1.dtsample)
-        tsample2 = (t0 + isr2 * fh2.dtsample)
+            # current sample positions in stream
+            # (each averaged onto same time grid)
+            isr = idx * rows[i] + np.arange(rows[i])
+            tsample[i] = (t0 + isr * fh.dtsample).mjd
+            tsample[i] = tsample[i].reshape(-1, Tf[i]).mean(axis=-1)
+
+        print("T",idx, tsample[0][0:4], tsample[1][0:4])
         # x-correlate
         xpower = chans[0] * chans[1].conjugate()
 
-        if do_foldspec:
+        if do_foldspec and 0:
             # time since start
-#            tsample = np.mean([tsample1.value, tsample2.value], axis=0)
+            tsamples = np.mean(tsamples, axis=0)
             # bin in the time series: 0..ntbin-1
-#            ibin = idx * ntbin // nt
+            ibin = idx * ntbin // nt
 
             # TODO: dedisperse the individual timeseries
-            for k in xrange(nchan):
+            for k in xrange(xpower.shape[1]):
                 if dedisperse == 'coherent':
                     t = tsample  # already dedispersed
                 elif dedisperse in ['incoherent', 'by-channel']:
@@ -242,8 +248,8 @@ def correlate(fh1, fh2, dm, nchan, ngate, ntbin, nt, ntint, ntw,
                 iphase = np.remainder(phase*ngate,
                                       ngate).astype(np.int)
                 # sum and count samples by phase bin
-                foldspec[k, :, ibin] += np.bincount(iphase, power[:, k], ngate)
-                icount[k, :, ibin] += np.bincount(iphase, power[:, k] != 0.,
+                foldspec[k, :, ibin] += np.bincount(iphase, np.abs(xpower[:, k]), ngate)
+                icount[k, :, ibin] += np.bincount(iphase, np.abs(xpower[:, k]) != 0.,
                                                   ngate)
 
         if save_xcorr:

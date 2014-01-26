@@ -26,11 +26,14 @@ if __name__ == '__main__':
     files1 = Obs['lofar'].file_list(obskey1)
     files2 = Obs['gmrt'].file_list(obskey2)
 
+
     assert psr1 == psr2
     dm = Obs['psrs'][psr1]['dm']
     with LOFARdata_Pcombined(*files1, comm=comm) as fh1,\
             GMRTdata(*files2, comm=comm) as fh2:
+        phasepol1 = Obs['lofar'][obskey1].get_phasepol(fh1.time0)
+        phasepol2 = Obs['gmrt'][obskey2].get_phasepol(fh2.time0)
         correlate.correlate(fh1, fh2, dm=dm, nchan=512, ngate=512,
                             ntbin=12, nt=12, ntint=12, ntw=10200,
                             t0='2013-07-25T22:25:01.0',
-                            t1='2013-07-25T22:25:12.0')
+                            t1='2013-07-25T22:25:12.0', phasepol=(phasepol1, phasepol2))
