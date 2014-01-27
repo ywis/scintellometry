@@ -97,8 +97,9 @@ def correlate(fh1, fh2, dm, nchan, ngate, ntbin, nt, ntw,
 
         # sort channels from low --> high frequency
         if np.diff(fh.freq.value).mean() < 0.:
-            if verbose > 1:
-                print("Will sort {0} frequencies before x-corr".format(fh))
+            if rank == 0 and verbose > 1:
+                print("Will frequency-sort {0} data before x-corr"
+                      .format(fh.telescope))
             fh.freqsort = True
         else:
             fh.freqsort = False
@@ -158,7 +159,7 @@ def correlate(fh1, fh2, dm, nchan, ngate, ntbin, nt, ntw,
         print("\nReading {0} blocks of fh1, {1} blocks of fh2, "
               "for equal timeblocks of {2} sec ".format(Rf[0], Rf[1], tmp))
 
-        if verbose > 1:
+        if rank == 0 and verbose > 1:
             tmp = np.diff(freqs).mean()
             print("Averaging over {0} channels in fh1, {1} in fh2, for equal "
                   "frequency bins of {2} MHz".format(NUf[0], NUf[1], tmp))
@@ -167,12 +168,12 @@ def correlate(fh1, fh2, dm, nchan, ngate, ntbin, nt, ntw,
                   "samples of {2} s\n".format(Tf[0], Tf[1], tmp))
 
         # check if we are averaging both fh's
-        if np.all(np.array(Tf) != 1):
+        if rank == 0 and np.all(np.array(Tf) != 1):
             txt = "Note, averaging both fh's in time to have similar sample "\
                   "size. You may want to implement interpolation, or think "\
                   "more about this situation"
             print(txt)
-        if np.all(np.array(NUf) != 1):
+        if rank == 0 and np.all(np.array(NUf) != 1):
             txt = "Note, averaging both fh's in freq to have similar sample "\
                   "size. You may want to implement interpolation, or think "\
                   "more about this situation"
@@ -187,14 +188,16 @@ def correlate(fh1, fh2, dm, nchan, ngate, ntbin, nt, ntw,
 
     if save_xcorr:
         # output dataset
-        outname = "{0}_{1}_{2}_{3}.hdf5".format(fh1.telescope, fh2.telescope,
-                                                t0, t1)
+        outname = "{0}{1}_{2}_{3}.hdf5".format(
+            fh1.telescope[0], fh2.telescope[0], t0, t1)
         # mpi doesn't like colons
         outname = outname.replace(':', '')
         fcorr = h5py.File(outname, 'w')  # , driver='mpio', comm=comm)
         ## create the x-corr output file
         # save the frequency grids to help with future TODO: interpolate onto
         # same frequency grid. For now the frequencies fall within same bin
+        if rank == 0 and verbose:
+            print("Saving x-corr to %s" % outname)
         fcorr.create_dataset('freqs', data=np.hstack([f.to(u.MHz).value
                                                       for f in freqs]))
 
@@ -206,12 +209,15 @@ def correlate(fh1, fh2, dm, nchan, ngate, ntbin, nt, ntw,
 
     # start reading the data
     # this_nskip moves to 't0', rank is for MPI
-    raws = [fh.seek_record_read((fh.this_nskip + rank * Rf[i])
+    idx = rank
+    raws = [fh.seek_record_read((fh.this_nskip + idx * Rf[i])
                                 * fh.blocksize, fh.blocksize * Rf[i])
             for i, fh in enumerate(fhs)]
-    idx = 0
     endread = False
     while np.all([raw.size > 0 for raw in raws]):
+        if verbose:
+            print("idx",idx, fh1.time(), fh2.time())
+
         vals = raws
         chans = [None, None]
         tsamples = [None, None]
@@ -284,7 +290,7 @@ def correlate(fh1, fh2, dm, nchan, ngate, ntbin, nt, ntw,
             for iw in xrange(isr[0] // ntw, isr[-1] // ntw + 1):
                 if iw < nwsize:  # add sum of corresponding samples
                     waterfall[0:xpower.shape[1], iw] += \
-                        np.sum(xpower[isr // ntw == iw], axis=0)
+                        np.abs(np.sum(xpower[isr // ntw == iw], axis=0))
 
         if do_foldspec:
             # time since start (average of the two streams)
@@ -293,12 +299,11 @@ def correlate(fh1, fh2, dm, nchan, ngate, ntbin, nt, ntw,
             tsample = np.array(tsamples)
 
             # timeseries already dedispersed
+            # TODO: figure out which phasepol to use
             phase = phasepol[0](tsample[0])
             phase1 = phasepol[1](tsample[1])
             iphase = np.remainder(phase*ngate,
                                   ngate).astype(np.int)
-            # diagnostics
-            print("P",phase[0], phase[-1], phase1[0],phase1[-1])
 
             # bin in the time series: 0..ntbin-1
             ibin = idx * ntbin // nt
@@ -312,28 +317,28 @@ def correlate(fh1, fh2, dm, nchan, ngate, ntbin, nt, ntw,
 
         if save_xcorr:
             curshape = dset.shape
-            nx = max(nrows * (idx + rank), curshape[0])
+            nx = max(nrows * (idx + 1), curshape[0])
             dset.resize((nx + nrows, curshape[1]))
-            # TODO: h5py mpio stalls here...
-            dset[nrows * (idx + rank): nrows * (idx + rank + 1)] = xpower
+            # TODO: h5py mpio stalls here... turn off save_xcorr for mpirun
+            dset[nrows * idx : nrows * (idx + 1)] = xpower
 
             # tsteps.resize((nx + nrows))
-            # tsteps[nrows * (idx + rank): nrows * (idx + rank + 1)] = tsample1
+            # tsteps[nrows * idx: nrows * (idx + 1)] = tsample1
 
         # read in next dataset if we haven't hit t1 yet
         for fh in [fh1, fh2]:
             if (fh.time() - t1).sec > 0.:
                 endread = True
+
         if endread:
             break
         else:
-            raws = [fh.seek_record_read((fh.this_nskip + (rank + idx) * Rf[i])
+            idx += size
+            raws = [fh.seek_record_read((fh.this_nskip + idx * Rf[i])
                                         * fh.blocksize, fh.blocksize * Rf[i])
                     for i, fh in enumerate(fhs)]
-        print("idx",idx, fh1.time(), fh2.time())
-        idx += size
-
-    fcorr.close()
+    if save_xcorr:
+        fcorr.close()
     return foldspec, icount, waterfall
 
 def data_averaging_coeffs(fh1, fh2):
