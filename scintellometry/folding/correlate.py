@@ -1,3 +1,12 @@
+"""
+ prawn modules for mpi-h5py
+  gcc/4.8.2 hdf5/1.8.12-gcc-4.8.2-openmpi-1.6.5
+  fftw/3.3.3-gcc-4.8.2-openmpi-1.6.5
+  openmpi/1.6.5-gcc-4.8.2
+  python/2.7.6
+  git/1.8.2.1
+
+"""
 from __future__ import division, print_function
 
 from fractions import Fraction
@@ -24,10 +33,11 @@ dispersion_delay_constant = 4149. * u.s * u.MHz**2 * u.cm**3 / u.pc
 _fref = 150. * u.MHz  # ref. freq. for dispersion measure
 
 
-def correlate(fh1, fh2, dm, nchan, ngate, ntbin, nt, ntint, ntw,
+def correlate(fh1, fh2, dm, nchan, ngate, ntbin, nt, ntw,
               dedisperse='incoherent', rfi_filter_raw=None, fref=_fref,
-              save_xcorr=True, do_foldspec=1, phasepol=None,
-              t0=None, t1=None, comm=None):
+              save_xcorr=True, do_foldspec=True, phasepol=None,
+              do_waterfall=True,
+              t0=None, t1=None, comm=None, verbose=2):
     """
     fh1 : file handle of first data stream
     fh2 : file handle of second data stream
@@ -40,20 +50,13 @@ def correlate(fh1, fh2, dm, nchan, ngate, ntbin, nt, ntint, ntw,
     comm : MPI communicator or None
 
     """
-
+    fhs = [fh1, fh2]
     if comm is None:
         rank = 0
         size = 1
     else:
-        # TODO, make mpi-capable
         rank = comm.rank
         size = comm.size
-
-    # initialize the folded spectrum and waterfall
-    foldspec = np.zeros((nchan, ngate, ntbin))
-    icount = np.zeros((nchan, ngate, ntbin), dtype=np.int64)
-    waterfall = np.zeros((nchan, ngate, ntbin))
-    nwsize = nt * ntint // ntw
 
     # find nearest starttime landing on same sample
     if t0 is None:
@@ -63,7 +66,7 @@ def correlate(fh1, fh2, dm, nchan, ngate, ntbin, nt, ntint, ntw,
     t1 = Time(t1, scale='utc')
 
     # prep the fhs for xcorr stream, setting up channelization, dedispersion...
-    for i, fh in enumerate([fh1, fh2]):
+    for i, fh in enumerate(fhs):
         fh.seek(t0)
         fh.dt1 = (1. / fh.samplerate).to(u.s)
         fh.this_nskip = fh.nskip(t0)
@@ -88,30 +91,37 @@ def correlate(fh1, fh2, dm, nchan, ngate, ntbin, nt, ntint, ntw,
             else:
                 fh.freq = fh.fedge\
                     + fh.thisfftfreq(nchan * 2, fh.dt1.value) * u.Hz
-            # sort lowest to highest freq
-            # freq.sort()
             # [::2] sets frequency channels to numerical recipes ordering
             # or, rfft has an unusual ordering
             fh.freq = fh.freq[::2]
 
+        # sort channels from low --> high frequency
+        if np.diff(fh.freq.value).mean() < 0.:
+            if verbose > 1:
+                print("Will sort {0} frequencies before x-corr".format(fh))
+            fh.freqsort = True
+        else:
+            fh.freqsort = False
+
         fh.dt = (dispersion_delay_constant * dm *
                  ( 1./fh.freq**2 - 1./fref**2) ).to(u.s).value
-        # number of time bins to np.roll the channels for incoherent dedisperse
-        fh.ndt = (fh.dt / fh.dtsample.to(u.s).value)
-        fh.ndt = -1 * np.rint(fh.ndt).astype(np.int)
 
-        if dedisperse in ['coherent', 'by-channel']:
+        # number of time bins to np.roll the channels for incoherent dedisperse
+        if dedisperse == 'incoherent':
+            fh.ndt = (fh.dt / fh.dtsample.to(u.s).value)
+            fh.ndt = -1 * np.rint(fh.ndt).astype(np.int)
+
+        elif dedisperse in ['coherent', 'by-channel']:
             # pre-calculate required turns due to dispersion
             if fh.nchan > 1:
-                fcoh = (fh.freq[np.newaxis, :] +
-                        fftfreq(ntint, fh.dtsample.value)[:, np.newaxis]
-                        * u.Hz)
+                fcoh = (fh.freq[np.newaxis, :] + fftfreq(fh.ntint(nchan),
+                        fh.dtsample.value)[:, np.newaxis] * u.Hz)
             else:
                 if fh.fedge_at_top:
-                    fcoh = fh.fedge - fh.thisfftfreq(nchan * 2 * ntint,
+                    fcoh = fh.fedge - fh.thisfftfreq(nchan*2*fh.ntint(nchan),
                                                      fh.dt1.value) * u.Hz
                 else:
-                    fcoh = fh.fedge + fh.thisfftfreq(nchan * 2 * ntint,
+                    fcoh = fh.fedge + fh.thisfftfreq(nchan*2*fh.ntint(nchan),
                                                      fh.dt1.value) * u.Hz
 
             #set frequency relative to which dispersion is coherently corrected
@@ -119,7 +129,7 @@ def correlate(fh1, fh2, dm, nchan, ngate, ntbin, nt, ntint, ntw,
                 _fref = fref
             else:
                 #fref = np.round((fcoh * fh.dtsample).to(1).value)/fh.dtsample
-                _fref = np.repeat(fh.freq.value, ntint) * fh.freq.unit
+                _fref = np.repeat(fh.freq.value, fh.ntint(nchan))*fh.freq.unit
             # (check via eq. 5.21 and following in
             # Lorimer & Kramer, Handbook of Pulsar Astrono
             dang = (dispersion_delay_constant * dm * fcoh *
@@ -142,11 +152,46 @@ def correlate(fh1, fh2, dm, nchan, ngate, ntbin, nt, ntint, ntw,
     (Rf, Tf, NUf, fkeep, freqs, rows) = data_averaging_coeffs(fh1, fh2)
     nrows = int(min(rows[0] * Tf[1] / Tf[0], rows[1] * Tf[0] / Tf[1]))
 
+    # summarize the (re)sampling
+    if rank == 0:
+        tmp = fh1.dtsample.to(u.s).value * fh1.blocksize / fh1.recordsize*Rf[0]
+        print("\nReading {0} blocks of fh1, {1} blocks of fh2, "
+              "for equal timeblocks of {2} sec ".format(Rf[0], Rf[1], tmp))
+
+        if verbose > 1:
+            tmp = np.diff(freqs).mean()
+            print("Averaging over {0} channels in fh1, {1} in fh2, for equal "
+                  "frequency bins of {2} MHz".format(NUf[0], NUf[1], tmp))
+            tmp = fh1.dtsample.to(u.s).value*Tf[0]
+            print("Averaging over {0} timesteps in fh1, {1} in fh2, for equal "
+                  "samples of {2} s\n".format(Tf[0], Tf[1], tmp))
+
+        # check if we are averaging both fh's
+        if np.all(np.array(Tf) != 1):
+            txt = "Note, averaging both fh's in time to have similar sample "\
+                  "size. You may want to implement interpolation, or think "\
+                  "more about this situation"
+            print(txt)
+        if np.all(np.array(NUf) != 1):
+            txt = "Note, averaging both fh's in freq to have similar sample "\
+                  "size. You may want to implement interpolation, or think "\
+                  "more about this situation"
+            print(txt)
+
+    # initialize the folded spectrum and waterfall
+    nchans = min([len(fh.freq[fkeep[i]] / NUf[i]) for i, fh in enumerate(fhs)])
+    foldspec = np.zeros((nchans, ngate, ntbin))
+    icount = np.zeros((nchans, ngate, ntbin), dtype=np.int64)
+    nwsize = min(nt * fh1.ntint(nchan) // ntw, nt * fh2.ntint(nchan) // ntw)
+    waterfall = np.zeros((nchans, nwsize))
+
     if save_xcorr:
         # output dataset
         outname = "{0}_{1}_{2}_{3}.hdf5".format(fh1.telescope, fh2.telescope,
                                                 t0, t1)
-        fcorr = h5py.File(outname, 'w')  # driver='mpio', comm=comm)
+        # mpi doesn't like colons
+        outname = outname.replace(':', '')
+        fcorr = h5py.File(outname, 'w')  # , driver='mpio', comm=comm)
         ## create the x-corr output file
         # save the frequency grids to help with future TODO: interpolate onto
         # same frequency grid. For now the frequencies fall within same bin
@@ -162,18 +207,19 @@ def correlate(fh1, fh2, dm, nchan, ngate, ntbin, nt, ntint, ntw,
     # start reading the data
     # this_nskip moves to 't0', rank is for MPI
     raws = [fh.seek_record_read((fh.this_nskip + rank * Rf[i])
-                               * fh.blocksize, fh.blocksize * Rf[i])
-            for i, fh in enumerate([fh1, fh2])]
+                                * fh.blocksize, fh.blocksize * Rf[i])
+            for i, fh in enumerate(fhs)]
     idx = 0
     endread = False
     while np.all([raw.size > 0 for raw in raws]):
-        vals = raws #[raw1, raw2]
+        vals = raws
         chans = [None, None]
-        tsample = [None, None]
+        tsamples = [None, None]
+        isrs = [None, None]
 
         # prep the data (channelize, dedisperse, ...)
 
-        for i, fh in enumerate([fh1, fh2]):
+        for i, fh in enumerate(fhs):
             if rfi_filter_raw is not None:
                 raws[i], ok = rfi_filter_raw(raws[i], nchan)
 
@@ -201,12 +247,11 @@ def correlate(fh1, fh2, dm, nchan, ngate, ntbin, nt, ntint, ntw,
             else:  # lofar and gmrt-phased are already channelised
                 chans[i] = vals[i]
 
-            # TODO: profile
+            # dedisperse on original (raw) time/freq grid
+            # TODO: profile for speedup
             if dedisperse == 'incoherent':
-                #chans[i] = np.roll(chans[i], fh.ndt)
                 for ci, v in enumerate(fh.ndt):
-                    # print("CI",i,ci,v, type(chans[i]), type(chans[i][0,0]))
-                    chans[i][...,ci] = np.roll(chans[i][...,ci], v, axis=0)
+                    chans[i][..., ci] = np.roll(chans[i][..., ci], v, axis=0)
 
             # average onto same time grid
             chans[i] = chans[i].reshape(Tf[i], chans[i].shape[0] / Tf[i], -1)\
@@ -219,44 +264,59 @@ def correlate(fh1, fh2, dm, nchan, ngate, ntbin, nt, ntint, ntw,
 
             # current sample positions in stream
             # (each averaged onto same time grid)
-            isr = idx * rows[i] + np.arange(rows[i])
-            tsample[i] = (t0 + isr * fh.dtsample).mjd
-            tsample[i] = tsample[i].reshape(-1, Tf[i]).mean(axis=-1)
+            isrs[i] = idx * rows[i] + np.arange(rows[i])
+            tsamples[i] = (fh.this_nskip * fh.dtsample * fh.ntint(nchan)
+                           + isrs[i] * fh.dtsample)
+            tsamples[i] = tsamples[i].reshape(-1, Tf[i]).mean(axis=-1)
 
-        print("T",idx, tsample[0][0:4], tsample[1][0:4])
+            # finally sort the channels low --> high (if necessary)
+            # before x-correlating
+            if fh.freqsort:
+                # TODO: need to think about ordering
+                chans[i] = chans[i][..., ::-1]
+
         # x-correlate
         xpower = chans[0] * chans[1].conjugate()
 
-        if do_foldspec and 0:
-            # time since start
-            tsamples = np.mean(tsamples, axis=0)
+        if do_waterfall:
+            # loop over corresponding positions in waterfall
+            isr = idx * nrows + np.arange(nrows)
+            for iw in xrange(isr[0] // ntw, isr[-1] // ntw + 1):
+                if iw < nwsize:  # add sum of corresponding samples
+                    waterfall[0:xpower.shape[1], iw] += \
+                        np.sum(xpower[isr // ntw == iw], axis=0)
+
+        if do_foldspec:
+            # time since start (average of the two streams)
+            # TODO: think about this: take one stream, both, average, ...
+            #tsample = np.mean(tsamples, axis=0)
+            tsample = np.array(tsamples)
+
+            # timeseries already dedispersed
+            phase = phasepol[0](tsample[0])
+            phase1 = phasepol[1](tsample[1])
+            iphase = np.remainder(phase*ngate,
+                                  ngate).astype(np.int)
+            # diagnostics
+            print("P",phase[0], phase[-1], phase1[0],phase1[-1])
+
             # bin in the time series: 0..ntbin-1
             ibin = idx * ntbin // nt
-
-            # TODO: dedisperse the individual timeseries
-            for k in xrange(xpower.shape[1]):
-                if dedisperse == 'coherent':
-                    t = tsample  # already dedispersed
-                elif dedisperse in ['incoherent', 'by-channel']:
-                    t = tsample - dt[k]  # dedispersed times
-                elif dedisperse is None:
-                    t = tsample  # do nothing
-                else:
-                    t = tsample - dt[k]
-
-                phase = phasepol(t)  # corresponding PSR phases
-                iphase = np.remainder(phase*ngate,
-                                      ngate).astype(np.int)
-                # sum and count samples by phase bin
-                foldspec[k, :, ibin] += np.bincount(iphase, np.abs(xpower[:, k]), ngate)
-                icount[k, :, ibin] += np.bincount(iphase, np.abs(xpower[:, k]) != 0.,
+            for k in xrange(nchans):  # equally xpower.shape[1]
+                foldspec[k, :, ibin] += np.bincount(iphase,
+                                                    np.abs(xpower[:, k]),
+                                                    ngate)
+                icount[k, :, ibin] += np.bincount(iphase,
+                                                  np.abs(xpower[:, k]) != 0.,
                                                   ngate)
 
         if save_xcorr:
             curshape = dset.shape
             nx = max(nrows * (idx + rank), curshape[0])
             dset.resize((nx + nrows, curshape[1]))
+            # TODO: h5py mpio stalls here...
             dset[nrows * (idx + rank): nrows * (idx + rank + 1)] = xpower
+
             # tsteps.resize((nx + nrows))
             # tsteps[nrows * (idx + rank): nrows * (idx + rank + 1)] = tsample1
 
@@ -269,7 +329,7 @@ def correlate(fh1, fh2, dm, nchan, ngate, ntbin, nt, ntint, ntw,
         else:
             raws = [fh.seek_record_read((fh.this_nskip + (rank + idx) * Rf[i])
                                         * fh.blocksize, fh.blocksize * Rf[i])
-                    for i, fh in enumerate([fh1, fh2])]
+                    for i, fh in enumerate(fhs)]
         print("idx",idx, fh1.time(), fh2.time())
         idx += size
 
@@ -287,7 +347,7 @@ def data_averaging_coeffs(fh1, fh2):
                   / fh1.recordsize)
     sr /= Fraction(fh2.dtsample.to(u.s).value * fh2.blocksize
                    / fh2.recordsize)
-    sr = sr.limit_denominator(5000)
+    sr = sr.limit_denominator(1000)
     nf1 = sr.denominator
     nf2 = sr.numerator
 
@@ -309,13 +369,13 @@ def data_averaging_coeffs(fh1, fh2):
         & (fh1.freq < min(f1info[0], f2info[0]))
     f2keep = (fh2.freq > max(f1info[1], f2info[1])) \
         & (fh2.freq < min(f1info[0], f2info[0]))
-    # np.save('f1freq.npy', fh1.freq.value)
-    # np.save('f2freq.npy', fh2.freq.value)
+
     Favg = abs(Fraction(np.diff(fh1.freq.value).mean()
                         / np.diff(fh2.freq.value).mean()))
-    Favg = Favg.limit_denominator(5000)
+    Favg = Favg.limit_denominator(200)
     Fden = Favg.denominator
     Fnum = Favg.numerator
+    # the frequencies we keep
     freq1 = fh1.freq[f1keep]
     freq1 = freq1.reshape(freq1.size / Fden, Fden).mean(axis=-1)
     freq2 = fh2.freq[f2keep]
@@ -328,5 +388,3 @@ def data_averaging_coeffs(fh1, fh2):
 
     return ((nf1, nf2), (Tnum, Tden), (Fden, Fnum), (f1keep, f2keep),
             (freq1, freq2), (raw1_nrows, raw2_nrows))
-    #    return (nf1, nf2, Tnum, Tden, Fnum, Fden, f1keep, f2keep, freq1, freq2,
-    #            raw1_nrows, raw2_nrows)
