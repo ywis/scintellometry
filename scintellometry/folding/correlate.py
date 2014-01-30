@@ -65,11 +65,28 @@ def correlate(fh1, fh2, dm, nchan, ngate, ntbin, nt, ntw,
     t0 = Time(t0, scale='utc')
     t1 = Time(t1, scale='utc')
 
+    # find time offset between the two fh's, accomodating the relative phase
+    # delay of the pulsar (the propagation delay)
+    phases = [phasepol[i]((t0 - fhs[i].time0).sec) for i in [0, 1]]
+    F0 = np.mean([phasepol[i].deriv(1)((t0 - fhs[i].time0).sec)
+                  for i in [0, 1]])
+    # propagation delay offset from fh1
+    dts = [0. * u.s, np.diff(phases)[0] / F0 * u.s]
+    if rank == 0:
+        print("Will read fh2 ({0}) {1} ahead of fh1 ({2}) "
+              "for propagation delay".format(fh2.telescope,
+                                             dts[1].to(u.millisecond),
+                                             fh1.telescope))
+
     # prep the fhs for xcorr stream, setting up channelization, dedispersion...
     for i, fh in enumerate(fhs):
         fh.seek(t0)
+        # byte offset for propagation delay
+        fh.prop_delay = int(round(dts[i] / fh.dtsample)) * fh.recordsize
         fh.dt1 = (1. / fh.samplerate).to(u.s)
         fh.this_nskip = fh.nskip(t0)
+        if rank == 1:
+            return None
         # set up FFT functions: real vs complex fft's
         if fh.nchan > 1:
             fh.thisfft = fft
@@ -197,23 +214,29 @@ def correlate(fh1, fh2, dm, nchan, ngate, ntbin, nt, ntw,
         # save the frequency grids to help with future TODO: interpolate onto
         # same frequency grid. For now the frequencies fall within same bin
         if rank == 0 and verbose:
-            print("Saving x-corr to %s" % outname)
+            print("Saving x-corr to %s\n" % outname)
         fcorr.create_dataset('freqs', data=np.hstack([f.to(u.MHz).value
                                                       for f in freqs]))
 
         # the x-corr data [tsteps, channels]
         dset = fcorr.create_dataset('corr', (nrows, freqs[0].size),
                                     dtype='complex64', maxshape=(None, nchan))
-        #tsteps = fcorr.create_dataset('tsteps', shape=(nrows),
-        #                              dtype='float64', maxshape=(None))
+        dset.attrs.create('dedisperse', data=str(dedisperse))
+        dset.attrs.create('tsample',
+                          data=[Rf[i] * fhs[i].blocksize / fhs[i].recordsize
+                                for i in [0, 1]])
+        dset.attrs.create('chanbw', data=np.diff(freqs).mean())
 
     # start reading the data
     # this_nskip moves to 't0', rank is for MPI
     idx = rank
     raws = [fh.seek_record_read((fh.this_nskip + idx * Rf[i])
-                                * fh.blocksize, fh.blocksize * Rf[i])
+                                * fh.blocksize - fh.prop_delay,
+                                fh.blocksize * Rf[i])
             for i, fh in enumerate(fhs)]
     endread = False
+    print("read step (idx), fh1.time(), fh2.time() ")
+    print("remember the propagation delay of {0}".format(dts[1]))
     while np.all([raw.size > 0 for raw in raws]):
         if verbose:
             print("idx",idx, fh1.time(), fh2.time())
@@ -299,10 +322,8 @@ def correlate(fh1, fh2, dm, nchan, ngate, ntbin, nt, ntw,
             tsample = np.array(tsamples)
 
             # timeseries already dedispersed
-            # TODO: figure out which phasepol to use
             phase = phasepol[0](tsample[0])
-            phase1 = phasepol[1](tsample[1])
-            iphase = np.remainder(phase*ngate,
+            iphase = np.remainder(phase * ngate,
                                   ngate).astype(np.int)
 
             # bin in the time series: 0..ntbin-1
@@ -320,10 +341,7 @@ def correlate(fh1, fh2, dm, nchan, ngate, ntbin, nt, ntw,
             nx = max(nrows * (idx + 1), curshape[0])
             dset.resize((nx + nrows, curshape[1]))
             # TODO: h5py mpio stalls here... turn off save_xcorr for mpirun
-            dset[nrows * idx : nrows * (idx + 1)] = xpower
-
-            # tsteps.resize((nx + nrows))
-            # tsteps[nrows * idx: nrows * (idx + 1)] = tsample1
+            dset[nrows * idx: nrows * (idx + 1)] = xpower
 
         # read in next dataset if we haven't hit t1 yet
         for fh in [fh1, fh2]:
@@ -335,7 +353,8 @@ def correlate(fh1, fh2, dm, nchan, ngate, ntbin, nt, ntw,
         else:
             idx += size
             raws = [fh.seek_record_read((fh.this_nskip + idx * Rf[i])
-                                        * fh.blocksize, fh.blocksize * Rf[i])
+                                        * fh.blocksize - fh.prop_delay,
+                                        fh.blocksize * Rf[i])
                     for i, fh in enumerate(fhs)]
     if save_xcorr:
         fcorr.close()

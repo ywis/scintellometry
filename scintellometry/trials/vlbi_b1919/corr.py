@@ -33,8 +33,9 @@ def main_correlate(tel1, date1, tel2, date2, nchan, tstart, tend,
     """
     comm = MPI.COMM_WORLD
     if comm.size > 1 and save_xcorr:
-	print("Warning, h5py mpio stalled out for me. Disabling save_xcorr")
-	save_xcorr = False
+        if comm.rank == 0:
+	    print("Warning, h5py mpio is sometimes slow. Consider disabling save_xcorr")
+	# save_xcorr = False
     # observing parameters
     t0 = Time(tstart, scale='utc')
     t1 = Time(tend, scale='utc')
@@ -48,12 +49,14 @@ def main_correlate(tel1, date1, tel2, date2, nchan, tstart, tend,
     files2 = Obs[tel2].file_list(obskey2)
 
     assert psr1 == psr2
+    if comm.rank == 0:
+        print("forming visibilities from (telescope, observation_key) = \n"
+              "\t ({0}, {1}) and ({2}, {3}), source {4}".format(tel1, obskey1, tel2, obskey2, psr1))
     dm = Obs['psrs'][psr1]['dm']
     with LOFARdata_Pcombined(*files1, comm=comm) as fh1,\
             GMRTdata(*files2, comm=comm) as fh2:
-        phasepol1 = Obs['lofar'][obskey1].get_phasepol(fh1.time0)
-        phasepol2 = Obs['gmrt'][obskey2].get_phasepol(fh2.time0)
-
+        phasepol1 = Obs['lofar'][obskey1].get_phasepol(fh1.time0, rphase=None)
+        phasepol2 = Obs['gmrt'][obskey2].get_phasepol(fh2.time0, rphase=None)
         nt = min(fh1.ntimebins(t0, t1), fh2.ntimebins(t0, t1))
         # out = (foldspec, icount, waterfall)
         out = correlate.correlate(fh1, fh2, dm=dm, nchan=nchan, ngate=ngate,
