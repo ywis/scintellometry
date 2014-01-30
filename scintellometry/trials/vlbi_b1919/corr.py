@@ -24,7 +24,7 @@ def rfi_filter_raw(raw, nchan):
     rawbins *= ok
     return raw, ok
 
-def main_correlate(tel1, date1, tel2, date2, nchan, tstart, tend,
+def main_correlate(tel1, date1, tel2, date2, nchan, tstart, tend, dedisperse,
                    do_foldspec, ntbin, ngate,
                    do_waterfall, ntw_min,
                    save_xcorr, verbose=0):
@@ -61,7 +61,7 @@ def main_correlate(tel1, date1, tel2, date2, nchan, tstart, tend,
         # out = (foldspec, icount, waterfall)
         out = correlate.correlate(fh1, fh2, dm=dm, nchan=nchan, ngate=ngate,
                                   ntbin=ntbin, nt=nt, ntw=ntw_min,
-                                  t0=t0, t1=t1,
+                                  t0=t0, t1=t1, dedisperse=dedisperse,
                                   phasepol=(phasepol1, phasepol2),
                                   do_waterfall=do_waterfall,
                                   do_foldspec=do_foldspec,
@@ -204,8 +204,8 @@ if __name__ == '__main__':
     args.verbose = 0 if args.verbose is None else sum(args.verbose)
 
     main_correlate(args.tel1, args.date1, args.tel2, args.date2, args.nchan,
-                   args.starttime, args.endtime,
+                   args.starttime, args.endtime, args.dedisperse,
                    args.do_foldspec, args.ntbin, args.ngate,
-                   args.do_waterfall, args.ntw_min,
+                   args.do_waterfall, args.ntw_min, 
                    args.save_xcorr,
                    args.verbose)

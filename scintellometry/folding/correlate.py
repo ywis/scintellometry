@@ -223,7 +223,7 @@ def correlate(fh1, fh2, dm, nchan, ngate, ntbin, nt, ntw,
                                     dtype='complex64', maxshape=(None, nchan))
         dset.attrs.create('dedisperse', data=str(dedisperse))
         dset.attrs.create('tsample',
-                          data=[Rf[i] * fhs[i].blocksize / fhs[i].recordsize
+                          data=[fhs[i].dtsample.to(u.s).value * Tf[i]
                                 for i in [0, 1]])
         dset.attrs.create('chanbw', data=np.diff(freqs).mean())
 
@@ -236,7 +236,7 @@ def correlate(fh1, fh2, dm, nchan, ngate, ntbin, nt, ntw,
             for i, fh in enumerate(fhs)]
     endread = False
     print("read step (idx), fh1.time(), fh2.time() ")
-    print("remember the propagation delay of {0}".format(dts[1]))
+    print("\t inclues {0} propagation delay".format(dts[1]))
     while np.all([raw.size > 0 for raw in raws]):
         if verbose:
             print("idx",idx, fh1.time(), fh2.time())
