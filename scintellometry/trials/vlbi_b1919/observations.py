@@ -127,7 +127,7 @@ class observation(dict):
             else:
                 self[k] = v
 
-    def get_phasepol(self, time0):
+    def get_phasepol(self, time0, rphase='fraction', time_unit=u.second, convert=True):
         """
         return the phase polynomial at time0
         (calculated if necessary)
@@ -145,7 +145,7 @@ class observation(dict):
 
             polyco_file = get_pkg_data_filename(phasepol)
             polyco = Polyco(polyco_file)
-            phasepol = polyco.phasepol(time0, rphase='fraction', t0=time0,
+            phasepol = polyco.phasepol(time0, rphase=rphase, t0=time0,
                                        time_unit=u.second, convert=True)
         return phasepol
 
