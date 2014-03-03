@@ -201,10 +201,10 @@ def CL_parser():
         "Recall observations.conf stores the observation "
         "runs keyed by telescope and date.")
     d_parser.add_argument(
-        '-t0', '--starttime', type=str, default='2014-01-19T21:58:12.0',
+        '-t0', '--starttime', type=str, default='2014-01-19T20:58:12.0',
         help="Timestamp within the observation run to start processing.")
     d_parser.add_argument(
-        '-t1', '--endtime', type=str, default='2014-01-19T22:03:12.0',
+        '-t1', '--endtime', type=str, default='2014-01-19T21:00:12.0',
         help="Timestamp within the observation run to end processing "
         "(replaces the 'nt' argument).")
     d_parser.add_argument(

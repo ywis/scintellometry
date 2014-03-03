@@ -256,7 +256,6 @@ def fold(fh, comm, samplerate, fedge, fedge_at_top, nchan,
                     t = tsample - dt[k]
 
                 phase = phasepol(t)  # corresponding PSR phases
-                print("P",type(t), type(t[0]),t[0])
                 iphase = np.remainder(phase*ngate,
                                       ngate).astype(np.int)
                 # sum and count samples by phase bin
