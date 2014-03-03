@@ -608,7 +608,45 @@ header_defaults['gmrt'] = {
                'NSBLK':1}}
 
 
-def read_timestamp_file(filename, utc_offset):
+def read_timestamp_file(filename, utc_offset=5.5*u.hr):
+    """Read timestamps from GMRT timestamp file.
+
+    Parameters
+    ----------
+    filename : str
+        full path to the timestamp file
+    utc_offset : Quantity or TimeDelta
+        offset from UTC, subtracted from the times in the timestamp file.
+        Default: 5.5*u.hr
+
+    Returns
+    -------
+    indices : array of int
+        list of indices (alternating 0 and 1) into the two raw data files
+    timestamps : Time array
+        UTC times associated with the data blocks
+    gsb_start : Time
+        UTC time at which the GMRT software correlator was started
+
+    Notes
+    -----
+
+    A typical first line of a timestamp file is:
+
+    2014 01 20 02 28 10 0.811174 2014 01 20 02 28 10 0.622453760 5049 1
+
+    Here, the first set is the time as given by the PC that received the
+    block, the second that from GPS.  This is followed by a sequence number
+    and a sub-integration number.  These should increase monotonically.
+
+    The code checks that the time difference PC-GPS is (roughly) constant,
+    and that the first sequence was triggered on an integer GPS minute.
+
+    The actual data are stored in two interleaved streams, and the routine
+    returns a Time array that is twice the length of the time-stamp file,
+    having interpolated the times for the second data stream.
+    """
+
     pc_times = []
     gps_times = []
     ist_utc = TimeDelta(utc_offset)
@@ -616,15 +654,19 @@ def read_timestamp_file(filename, utc_offset):
     with open(filename) as fh:
         line = fh.readline()
         while line != '':
+            # convert the line to PC_int_sec_iso, PC_frac_sec,
+            # GPS_int_sec_iso, GPS_frac_sec, seq, sub
             strings = ('{}-{}-{}T{}:{}:{} {} {}-{}-{}T{}:{}:{} {} {} {}'
                        .format(*line.split())).split()
             seq = int(strings[4])
             sub = int(strings[5])
+            # check seq, sub increase monotonically
             if prevseq > 0:
                 assert seq == prevseq+1
                 assert sub == (prevsub+1) % 8
             prevseq, prevsub = seq, sub
-
+            # construct PC and GPS time, adding the int-sec and frac-sec parts
+            # and also correcting for the time zone
             time = (Time([strings[0], strings[2]], scale='utc') +
                     TimeDelta([float(strings[1]), float(strings[3])],
                               format='sec')) - ist_utc
@@ -638,7 +680,7 @@ def read_timestamp_file(filename, utc_offset):
     pc_times = Time(pc_times)
     gps_times = Time(gps_times)
     gps_pc = gps_times - pc_times
-    assert np.allclose(gps_pc.sec, gps_pc[0].sec, atol=1.e-3)
+    assert np.allclose(gps_pc.sec, gps_pc[0].sec, atol=2.e-3)
     dt = gps_times[1:] - gps_times[:-1]
     assert np.allclose(dt.sec, dt[0].sec, atol=1.e-5)
     gsb_start = gps_times[-1] - seq * dt[0]  # should be whole minute
