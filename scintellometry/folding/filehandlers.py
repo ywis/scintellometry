@@ -543,9 +543,10 @@ class GMRTdata(MultiFile):
                  utc_offset=5.5*u.hr,
                  samplerate=100./3.*u.MHz, fedge=156.*u.MHz,
                  fedge_at_top=True, comm=None):
-        # GMRT phased data stored in 4 MiB blocks with 2Mi complex samples
-        # split in 512 channels
-        # ci1 is special complex type, made of two signed int8s.
+        # GMRT phased data stored in blocks holding 0.25 s worth of data,
+        # separated over two streams (eacg with 0.125s).  For 16MHz BW, each
+        # block is 4 MiB with 2Mi complex samples split in 256 or 512 channels;
+        # complex samples consist of two signed ints (custom 'ci1' dtype).
         self.samplerate = samplerate
         self.fedge = fedge
         self.fedge_at_top = fedge_at_top

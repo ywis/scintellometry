@@ -35,7 +35,7 @@ def rfi_filter_power(power):
 def reduce(telescope, obsdate, tstart, tend, nchan, ngate, ntbin,
            ntw_min=10200, fref=_fref,
            rfi_filter_raw=None,
-           do_waterfall=True, do_foldspec=True, dedisperse=None,verbose=True):
+           do_waterfall=True, do_foldspec=True, dedisperse=None, verbose=True):
     comm = MPI.COMM_WORLD
     Obs = obsdata()
     # find nearest observation to 'date',
@@ -48,6 +48,9 @@ def reduce(telescope, obsdate, tstart, tend, nchan, ngate, ntbin,
     dm = Obs['psrs'][psr]['dm']
 
     files = Obs[telescope].file_list(obskey)
+    setup = Obs[telescope].get('setup', {})
+    setup.update(Obs[telescope][obskey].get('setup', {}))
+    setup = {k: eval(v) for k, v in setup.iteritems()}
     if telescope == 'kairo':
         raise ValueError("Kairo not yet set up!")
     elif telescope == 'lofar':
@@ -56,11 +59,11 @@ def reduce(telescope, obsdate, tstart, tend, nchan, ngate, ntbin,
     elif telescope == 'gmrt':
         GenericOpen = GMRTdata
 
-    with GenericOpen(*files, comm=comm) as fh:
+    with GenericOpen(*files, comm=comm, **setup) as fh:
         # nchan = None means data is channelized already, so we get this
         # property directly from the file
         if nchan is None or telescope == 'lofar':
-            if comm.rank == 0:
+            if telescope == 'lofar' and comm.rank == 0:
                 print("LOFAR data already channelized: overriding nchan to {0}"
                       "\n\t as configured in observations.conf"
                       .format(fh.nchan))
@@ -196,15 +199,15 @@ def CL_parser():
         '-t','--telescope', type=str, default='gmrt',
         help="The data to reduce. One of ['gmrt', 'kairo', 'lofar'].")
     d_parser.add_argument(
-        '-d','--date', type=str, default='2014-01-20',
+        '-d','--date', type=str, default='2014-01-19T22:22:48',
         help="The date of the data to reduce. "
         "Recall observations.conf stores the observation "
         "runs keyed by telescope and date.")
     d_parser.add_argument(
-        '-t0', '--starttime', type=str, default='2014-01-19T20:58:12.0',
+        '-t0', '--starttime', type=str, default='2014-01-19T22:22:49.0',
         help="Timestamp within the observation run to start processing.")
     d_parser.add_argument(
-        '-t1', '--endtime', type=str, default='2014-01-19T21:00:12.0',
+        '-t1', '--endtime', type=str, default='2014-01-19T22:27:49.0',
         help="Timestamp within the observation run to end processing "
         "(replaces the 'nt' argument).")
     d_parser.add_argument(
@@ -216,7 +219,7 @@ def CL_parser():
         '-f','--foldspec', type=bool, default=True,
         help="Produce a folded spectrum")
     f_parser.add_argument(
-        '-nc', '--nchan', type=int, default=512,
+        '-nc', '--nchan', type=int, default=None,
         help="Number of channels in folded spectrum.")
     f_parser.add_argument(
         '-ng', '--ngate', type=int, default=512,
@@ -224,7 +227,7 @@ def CL_parser():
     # f_parser.add_argument('-nt', '--nt', type=int, default=1800,
     #   help="number of time bins to fold the data into. ")
     f_parser.add_argument(
-        '-nb', '--ntbin', type=int, default=3,
+        '-nb', '--ntbin', type=int, default=5,
         help="number of time bins the time series is split into for folding.")
 
     w_parser = parser.add_argument_group("Waterfall related parameters")
@@ -264,7 +267,6 @@ if __name__ == '__main__':
         args.nchan = None
         args.ngate = 512
         args.date = '2014-01-20'
-        args.ntbin = 5
         args.ntw_min = 1020
         args.waterfall = True
         args.verbose += 1
@@ -277,16 +279,11 @@ if __name__ == '__main__':
 
     elif args.reduction_defaults == 'gmrt':
         args.telescope = 'gmrt'
-        args.date = '2014-01-20'
-        args.nchan = 512
-        args.ngate = 512
-        args.ntbin = 5
-        # 340 /(100.*u.MHz/3.) * 512 = 0.0052224 s = 256 bins/pulse
-        args.ntw_min = 340
+        # 17000 /(100.*u.MHz/3.) * 512 = 0.52224 s
+        args.ntw_min = 17000
         args.rfi_filter_raw = None
         args.waterfall = True
         args.verbose += 1
-        args.dedisperse = 'incoherent'
     reduce(
         args.telescope, args.date, tstart=args.starttime, tend=args.endtime,
         nchan=args.nchan, ngate=args.ngate, ntbin=args.ntbin,

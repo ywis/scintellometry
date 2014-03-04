@@ -139,8 +139,12 @@ def fold(fh, comm, samplerate, fedge, fedge_at_top, nchan,
     if dedisperse in ['coherent', 'by-channel']:
         # pre-calculate required turns due to dispersion
         if fh.nchan > 1:
-            fcoh = (freq[np.newaxis,:] +
-                    fftfreq(ntint, dtsample.value)[:,np.newaxis] * u.Hz)
+            if fedge_at_top:
+                fcoh = (freq[np.newaxis,:] - u.Hz *
+                        thisfftfreq(ntint, dtsample.value)[:,np.newaxis])
+            else:
+                fcoh = (freq[np.newaxis,:] + u.Hz *
+                        thisfftfreq(ntint, dtsample.value)[:,np.newaxis])
         else:
             if fedge_at_top:
                 fcoh = fedge - thisfftfreq(nchan*2*ntint, dt1.value) * u.Hz
@@ -151,8 +155,7 @@ def fold(fh, comm, samplerate, fedge, fedge_at_top, nchan,
         if dedisperse == 'coherent':
             _fref = fref
         else:
-            # _fref = np.round((fcoh * dtsample).to(1).value) / dtsample
-            _fref = np.repeat(freq.value, ntint) * freq.unit
+            _fref = freq[np.newaxis, :]
         # (check via eq. 5.21 and following in
         # Lorimer & Kramer, Handbook of Pulsar Astrono
         dang = (dispersion_delay_constant * dm * fcoh *
