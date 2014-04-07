@@ -67,6 +67,9 @@ def fold(file1, file2, dtype, fbottom, fwidth, nchan,
     else:
         rank = 0
         size = 1
+        def mpilofile(comm, file):
+            return open(file)
+
     # initialize folded spectrum and waterfall
     if do_foldspec:
         foldspec = np.zeros((nchan, ngate, ntbin))
@@ -91,7 +94,7 @@ def fold(file1, file2, dtype, fbottom, fwidth, nchan,
         if nskip > 0:
             if verbose and rank == 0:
                 print('Skipping {0} bytes'.format(nskip))
-            # if # MPI processes > 1 we seek in for-loop 
+            # if # MPI processes > 1 we seek in for-loop
             if size == 1:
                 fh1.seek(nskip * count * itemsize)
                 fh2.seek(nskip * count * itemsize)
@@ -129,10 +132,10 @@ def fold(file1, file2, dtype, fbottom, fwidth, nchan,
                 # data stored as series of floats in two files,
                 # one for real and one for imaginary
                 if size > 1:
-                    fh1.seek( (nskip + j)*count*itemsize)
-                    fh2.seek( (nskip + j)*count*itemsize)
-                raw1 = fromfile(fh1, dtype, count).reshape(-1,nchan)
-                raw2 = fromfile(fh2, dtype, count).reshape(-1,nchan)
+                    fh1.seek((nskip + j)*count*itemsize)
+                    fh2.seek((nskip + j)*count*itemsize)
+                raw1 = fromfile(fh1, dtype, count*itemsize).reshape(-1,nchan)
+                raw2 = fromfile(fh2, dtype, count*itemsize).reshape(-1,nchan)
             except(EOFError):
                 break
 

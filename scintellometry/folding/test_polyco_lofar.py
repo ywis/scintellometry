@@ -66,6 +66,7 @@ if __name__ == '__main__':
     do_waterfall = False
 
     foldspecs = []
+    icounts = []
     waterfalls = []
 
     for P in range(20):
@@ -74,19 +75,23 @@ if __name__ == '__main__':
 
         fbottom = fwidth*(563.+P*20)
 
-        f2, wf = fold(file1, file2, '>f4',
-                      fbottom, fwidth, nchan,
-                      nt, ntint, nskip,
-                      ngate, ntbin, ntw, dm, fref, phasepol,
-                      coherent=coherent, do_waterfall=do_waterfall,
-                      verbose=verbose, progress_interval=1)
+        f2, ic, wf = fold(file1, file2, '>f4',
+                          fbottom, fwidth, nchan,
+                          nt, ntint, nskip,
+                          ngate, ntbin, ntw, dm, fref, phasepol,
+                          coherent=coherent, do_waterfall=do_waterfall,
+                          verbose=verbose, progress_interval=1)
 
         np.save("lofar{}foldspec2{}.npy".format(psr, P), f2)
         foldspecs.append(f2)
+        icounts.append(ic)
         waterfalls.append(wf)
 
     foldspec2 = np.concatenate(foldspecs, axis=0)
     np.save("lofar{}foldspec2.npy".format(psr), foldspec2)
+
+    icount = np.concatenate(icounts, axis=0)
+    np.save("lofar{}icount.npy".format(psr), icount)
 
     if do_waterfall:
         waterfall = np.concatenate(waterfalls, axis=0)
