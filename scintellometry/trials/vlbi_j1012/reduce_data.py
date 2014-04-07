@@ -266,9 +266,9 @@ if __name__ == '__main__':
         # (previously args.nchan = 20)
         args.nchan = None
         args.ngate = 512
-        args.date = '2014-01-20'
+        args.date = '2014-01-20T22:30:00'
         args.ntw_min = 1020
-        args.waterfall = True
+        args.waterfall = False
         args.verbose += 1
         args.dedisperse = 'incoherent'
         args.rfi_filter_raw = None
