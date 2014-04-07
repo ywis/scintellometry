@@ -7,8 +7,9 @@ import astropy.units as u
 import astropy.io.fits as FITS
 
 try:
-    import pyfftw
-    pyfftw.interfaces.cache.enable()
+    # do *NOT* use on-disk cache; blue gene doesn't work; slower anyway
+    # import pyfftw
+    # pyfftw.interfaces.cache.enable()
     from pyfftw.interfaces.scipy_fftpack import (rfft, rfftfreq, irfft,
                                                  fft, ifft, fftfreq)
     _fftargs = {'threads': os.environ.get('OMP_NUM_THREADS', 2),
