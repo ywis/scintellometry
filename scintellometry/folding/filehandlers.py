@@ -20,7 +20,6 @@ from psrfits_tools import psrFITS
 
 
 # size in bytes of records read from file (simple for ARO: 1 byte/sample)
-# double since we need to get ntint samples after FFT
 def dtype_itemsize(dtype):
     bps = {'ci1': 2, '4bit': 0.5}.get(dtype, None)
     if bps is None:
@@ -131,7 +130,7 @@ class MultiFile(psrFITS):
         except AttributeError:
             pass
         except u.UnitsError:
-            offset = offset.to(u.byte).value
+            offset = int(offset.to(u.byte).value)
         else:
             offset = (offset/self.dtsample).to(u.dimensionless_unscaled)
             offset = int(round(offset)) * self.recordsize
@@ -327,11 +326,28 @@ class LOFARdata(MultiFile):
 
     telescope = 'lofar'
 
-    def __init__(self, raw_files, comm=None, blocksize=2**16*20*2*4):
+    def __init__(self, raw_files, comm=None, blocksize=2**16*20*2*4,
+                 refloat=True):
         """
         Initialize a lofar observation, tracking/joining the two polarizations.
         We also parse the corresponding HDF5 files to initialize:
         nchan, samplerate, fwidth
+
+        Parameters
+        ----------
+        raw_files : list
+            full paths to *.raw files; the associated *.h5 files are assumed
+            to be in the same directory.
+        comm : MPI communicator
+        blocksize : int or None
+            Preferred number of bytes that are read in one go.
+            Default: 2**16*20*2*4, unless i2f=True, in which case it will be
+            the block size used for writing the compressed data
+        refloat : Bool
+            Whether to convert compressed lofar data (stored as int1) back
+            to float using the associated scale factors.  If False, simply
+            use the integer data, ignoring the scale factors.  Default: True
+
         """
         # read the HDF5 file and get useful data
         h0 = HDF5File(raw_files[0].replace('.raw', '.h5'), 'r')
@@ -345,20 +361,30 @@ class LOFARdata(MultiFile):
         frequencies = (b0['COORDINATES']['COORDINATE_1']
                        .attrs['AXIS_VALUES_WORLD'] * u.Hz).to(u.MHz)
         fbottom = frequencies[0]
+        nchan = len(frequencies)  # = st0.attrs['NOF_SUBBANDS']
+        # can also get from np.diff(frequencies.diff).mean()
+        fwidth = u.Quantity(b0.attrs['SUBBAND_WIDTH'],
+                            b0.attrs['CHANNEL_WIDTH_UNIT']).to(u.MHz)
+
+        samplerate = u.Quantity(b0.attrs['SAMPLING_RATE'],
+                                b0.attrs['SAMPLING_RATE_UNIT']).to(u.MHz)
 
         stokes = sorted([i for i in b0.keys()
                          if 'STOKES' in i and 'i2f' not in i])
         st0 = b0[stokes[0]]
         dtype = _lofar_dtypes[st0.attrs['DATATYPE']]
 
-        nchan = len(frequencies)  # = st0.attrs['NOF_SUBBANDS']
+        if dtype == 'ci1' and refloat:  # compressed LOFAR file
+            # convert to float on-the-fly; ensure we look like float file
+            dtype = 'c8'
+            diginfo = b0['{0}_i2f'.format(stokes[0])]
+            self.scales = np.array(diginfo)
+            # size over which scaling was derived; this is *per file*
+            self.compressed_block_size = diginfo.attrs['{0}_recsize'
+                                                       .format(stokes[0])]
+        else:
+            self.scales = None
 
-        # can also get from np.diff(frequencies.diff).mean()
-        fwidth = (b0.attrs['SUBBAND_WIDTH'] *
-                  u.__dict__[b0.attrs['CHANNEL_WIDTH_UNIT']]).to(u.MHz)
-
-        samplerate = (b0.attrs['SAMPLING_RATE'] *
-                      u.__dict__[b0.attrs['SAMPLING_RATE_UNIT']]).to(u.MHz)
         h0.close()
 
         self.time0 = time0
@@ -389,21 +415,56 @@ class LOFARdata(MultiFile):
         read 'size' bytes of the LOFAR data; returns the two streams
         interleaved, such that one has complex numbers (either complex64
         or ci1, i.e., using two signed one-byte integers).
+
+        For compressed (int8) lofar data, the data are decompressed if
+        self.scale has been set (see refloat in initializer).
         """
-        z = np.empty(size, dtype='i1').reshape(2, -1, self.itemsize//2)
-        for fh, buf in zip(self.fh_raw, z):
-            fh.Iread([buf, MPI.BYTE])
-        return z.transpose(1, 0, 2).ravel()
+        if self.scales is None:
+            z = np.empty(size, dtype='i1').reshape(2, -1, self.itemsize // 2)
+            for fh, buf in zip(self.fh_raw, z):
+                fh.Iread([buf, MPI.BYTE])
+        else:  # rescaling compressed integer data
+            # offset and size in the compressed file
+            read_offset = self.offset // self.itemsize
+            read_size = size // self.itemsize
+            # create float output array (real, imag)
+            z = np.empty(read_size * 2, dtype='f4').reshape(2, -1, self.nchan)
+            # and a buffer to receive the compressed data
+            buf = np.empty(read_size, dtype='i1').reshape(-1, self.nchan)
+            for i, fh in enumerate(self.fh_raw):
+                fh.Iread([buf, MPI.BYTE])
+                # multiply with the scale appropriate for each part of the
+                # buffer (for smaller reads, this will be a single value)
+                for iscale in range(read_offset // self.compressed_block_size,
+                                    (read_offset + read_size) //
+                                    self.compressed_block_size + 1):
+                    # find range for which scale was determined
+                    i0 = iscale * self.compressed_block_size
+                    i1 = (iscale + 1) * self.compressed_block_size
+                    # get part that overlaps with the buffer
+                    i0 = max(0, (i0 - read_offset) // self.nchan)
+                    i1 = min(buf.shape[0], (i1 - read_offset) // self.nchan)
+                    # apply scales
+                    z[i, i0:i1] = buf[i0:i1] * self.scales[iscale, :]
+            z = z.reshape(2, -1, 1)
+
         self.offset += size
+        return z.transpose(1, 0, 2).ravel()
 
     def _seek(self, offset):
         """Offset by the given number of bytes"""
         if offset % self.recordsize != 0:
             raise ValueError("Cannot offset to non-integer number of records")
         # half the total number of corresponding bytes in each file
-        assert offset % 2 == 0
-        for fh in self.fh_raw:
-            fh.Seek(offset // 2)
+        # if compressed from float32 to int8: correct for additional factor 4.
+        if self.scales is None:
+            assert offset % 2 == 0
+            for fh in self.fh_raw:
+                fh.Seek(offset // 2)
+        else:
+            assert offset % 8 == 0
+            for fh in self.fh_raw:
+                fh.Seek(offset // 8)
         self.offset = offset
 
     def __repr__(self):

@@ -184,7 +184,8 @@ def fold(fh, comm, samplerate, fedge, fedge_at_top, nchan,
             # LOFAR returns complex64 (count/nchan, nchan)
             # LOFAR "combined" file class can do lots of seeks, we minimize
             # that with the 'seek_record_read' routine
-            raw = fh.seek_record_read((nskip+j)*fh.blocksize, fh.blocksize)
+            raw = fh.seek_record_read(int((nskip+j)*fh.blocksize),
+                                      fh.blocksize)
         except(EOFError, IOError) as exc:
             print("Hit {0!r}; writing pgm's".format(exc))
             break
