@@ -326,7 +326,7 @@ class LOFARdata(MultiFile):
 
     telescope = 'lofar'
 
-    def __init__(self, raw_files, comm=None, blocksize=2**16*20*2*4,
+    def __init__(self, raw_files, comm=None, blocksize=2**20,
                  refloat=True):
         """
         Initialize a lofar observation, tracking/joining the two polarizations.
@@ -340,9 +340,8 @@ class LOFARdata(MultiFile):
             to be in the same directory.
         comm : MPI communicator
         blocksize : int or None
-            Preferred number of bytes that are read in one go.
-            Default: 2**16*20*2*4, unless i2f=True, in which case it will be
-            the block size used for writing the compressed data
+            Preferred number of bytes *per channel* that are read in one go.
+            Default: 2**20, making ~20MB for 20 channels
         refloat : Bool
             Whether to convert compressed lofar data (stored as int1) back
             to float using the associated scale factors.  If False, simply
@@ -362,6 +361,7 @@ class LOFARdata(MultiFile):
                        .attrs['AXIS_VALUES_WORLD'] * u.Hz).to(u.MHz)
         fbottom = frequencies[0]
         nchan = len(frequencies)  # = st0.attrs['NOF_SUBBANDS']
+        blocksize *= nchan
         # can also get from np.diff(frequencies.diff).mean()
         fwidth = u.Quantity(b0.attrs['SUBBAND_WIDTH'],
                             b0.attrs['CHANNEL_WIDTH_UNIT']).to(u.MHz)
@@ -499,7 +499,7 @@ class LOFARdata_Pcombined(MultiFile):
                        for raw_files in raw_files_list]
         self.fh_links = []
         # make sure basic properties of the files are the same
-        for prop in ['dtype', 'itemsize', 'recordsize', 'time0', 'samplerate',
+        for prop in ['dtype', 'itemsize', 'time0', 'samplerate',
                      'fwidth', 'dtsample']:
             props = [fh.__dict__[prop] for fh in self.fh_raw]
             if prop == 'time0':
@@ -509,8 +509,9 @@ class LOFARdata_Pcombined(MultiFile):
 
         self.blocksize = sum([fh.blocksize for fh in self.fh_raw])
         self.recordsize = sum([fh.recordsize for fh in self.fh_raw])
-        self.frequencies = u.Quantity([fh.frequencies
-                                       for fh in self.fh_raw]).ravel()
+        self.frequencies = u.Quantity(np.hstack([fh.frequencies.value
+                                                 for fh in self.fh_raw]),
+                                      self.fh_raw[0].frequencies.unit)
         self.nchan = len(self.frequencies)
         self.offset = 0
 
@@ -528,16 +529,18 @@ class LOFARdata_Pcombined(MultiFile):
         return self.setsize
 
     def record_read(self, size):
-        assert size % len(self.fh_raw) == 0
-        raw = np.hstack([fh.record_read(size // len(self.fh_raw))
+        assert size % self.recordsize == 0
+        nrecords = size // self.recordsize
+        raw = np.hstack([fh.record_read(nrecords * fh.recordsize)
                          for fh in self.fh_raw])
         self.offset += size
         return raw
 
     def _seek(self, offset):
-        assert offset % len(self.fh_raw) == 0
+        assert offset % self.recordsize == 0
+        nrecoff = offset // self.recordsize
         for fh in self.fh_raw:
-            fh._seek(offset // len(self.fh_raw))
+            fh._seek(nrecoff * fh.recordsize)
         self.offset = offset
 
     def seek_record_read(self, offset, size):
@@ -545,9 +548,11 @@ class LOFARdata_Pcombined(MultiFile):
         LOFARdata_Pcombined class opens a lot of filehandles.
         This routine tries to minimize file seeks
         """
-        nfh = len(self.fh_raw)
-        assert offset % nfh == 0 and size % nfh == 0
-        raw = np.hstack([fh.seek_record_read(offset // nfh, size // nfh)
+        assert offset % self.recordsize == 0 and size % self.recordsize == 0
+        nrecoff = offset // self.recordsize
+        nrecords = size // self.recordsize
+        raw = np.hstack([fh.seek_record_read(nrecoff * fh.recordsize,
+                                             nrecords * fh.recordsize)
                          for fh in self.fh_raw])
         self.offset = offset + size
         return raw
