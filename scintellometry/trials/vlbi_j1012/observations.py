@@ -124,6 +124,8 @@ class observation(dict):
         for k, v in val.iteritems():
             if k == 'ppol' and v.startswith('Polynomial'):
                 self[k] = eval(v)
+            elif k in ('P', 'S'):
+                self[k] = [int(_v) for _v in v]
             else:
                 self[k] = v
 
@@ -161,9 +163,7 @@ def parse_tel(telname, vals):
             tel.update({key: obs})
             tel['observations'].append(key)
         except ValueError:
-            if key == 'P':
-                val = [int(v) for v in val]
-            elif key == 'S':
+            if key in ('P', 'S'):
                 val = [int(v) for v in val]
             tel.update({key: val})
     return tel

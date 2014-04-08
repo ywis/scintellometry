@@ -4,7 +4,7 @@ from __future__ import division, print_function
 import argparse
 import numpy as np
 import astropy.units as u
-from astropy.time import Time
+from astropy.time import Time, TimeDelta
 
 from scintellometry.folding.fold import Folder, normalize_counts
 from scintellometry.folding.pmap import pmap
@@ -32,7 +32,7 @@ def rfi_filter_power(power):
     return np.clip(power, 0., MAX_RMS**2 * power.shape[-1])
 
 
-def reduce(telescope, obsdate, tstart, tend, nchan, ngate, ntbin,
+def reduce(telescope, obskey, tstart, tend, nchan, ngate, ntbin,
            ntw_min=10200, fref=_fref,
            rfi_filter_raw=None,
            do_waterfall=True, do_foldspec=True, dedisperse=None, verbose=True):
@@ -40,7 +40,9 @@ def reduce(telescope, obsdate, tstart, tend, nchan, ngate, ntbin,
     Obs = obsdata()
     # find nearest observation to 'date',
     # warning if > 1s off requested start time of observation
-    obskey = Obs[telescope].nearest_observation(obsdate)
+    if obskey not in Obs[telescope]:
+        # assume it is a date, which may be only good to nearest second
+        obskey = Obs[telescope].nearest_observation(obskey)
     # target of this observation
     psr = Obs[telescope][obskey]['src']
     assert psr in Obs['psrs'].keys()
@@ -69,15 +71,20 @@ def reduce(telescope, obsdate, tstart, tend, nchan, ngate, ntbin,
                       .format(fh.nchan))
             nchan = fh.nchan
         time0 = fh.time0
+        tstart = time0 if tstart is None else Time(tstart, scale='utc')
+        try:
+            tend = Time(tend, scale='utc')
+            dt = tend - tstart
+        except ValueError:
+            dt = TimeDelta(float(tend), format='sec')
+            tend = tstart + dt
+
         phasepol = Obs[telescope][obskey].get_phasepol(time0)
         nt = fh.ntimebins(tstart, tend)
         ntint = fh.ntint(nchan)
         # number of samples to combine for waterfall
         ntw = min(ntw_min, nt*ntint)
         # number of records to skip
-        tstart = Time(tstart, scale='utc')
-        tend = Time(tend, scale='utc')
-        dt = tend - tstart
 
         fh.seek(tstart)
         if verbose and comm.rank == 0:
@@ -187,8 +194,8 @@ def CL_parser():
     parser.add_argument(
         '--reduction_defaults', type=str,
         help="One of ['aro', 'lofar', 'gmrt'].\n"
-        "A convenience flag to set the default parameters as "
-        "configured in aro.py, lofar.py, gmrt.py")
+        "A convenience flag to set default parameters as defined at the "
+        "end of reduce_data.py (TO DO: make dicts)")
 
     d_parser = parser.add_argument_group(
         "Data-related parameters \n"
@@ -199,17 +206,18 @@ def CL_parser():
         '-t','--telescope', type=str, default='gmrt',
         help="The data to reduce. One of ['gmrt', 'kairo', 'lofar'].")
     d_parser.add_argument(
-        '-d','--date', type=str, default='2014-01-19T22:22:48',
-        help="The date of the data to reduce. "
-        "Recall observations.conf stores the observation "
-        "runs keyed by telescope and date.")
+        '-d','--date','--observation', type=str, default='2014-01-19T22:22:48',
+        help="The date or other identifier of the data to reduce. "
+        "The key with which the observation is stored in observations.conf.")
     d_parser.add_argument(
-        '-t0', '--starttime', type=str, default='2014-01-19T22:22:49.0',
-        help="Timestamp within the observation run to start processing.")
+        '-t0', '--starttime', type=str, default=None,
+        help="Timestamp within the observation run to start processing."
+        "Default is start of the observation")
     d_parser.add_argument(
-        '-t1', '--endtime', type=str, default='2014-01-19T22:27:49.0',
-        help="Timestamp within the observation run to end processing "
-        "(replaces the 'nt' argument).")
+        '-t1', '--endtime', '-dt', '--duration', type=str,
+        default=300,
+        help="Timestamp within the observation run to end processing or "
+        "duration (in seconds) of the section to process.")
     d_parser.add_argument(
         '--rfi_filter_raw', action='store_true',
         help="Apply the 'rfi_filter_rwa' routine to the raw data.")
@@ -224,8 +232,6 @@ def CL_parser():
     f_parser.add_argument(
         '-ng', '--ngate', type=int, default=512,
         help="number of bins over the pulsar period.")
-    # f_parser.add_argument('-nt', '--nt', type=int, default=1800,
-    #   help="number of time bins to fold the data into. ")
     f_parser.add_argument(
         '-nb', '--ntbin', type=int, default=5,
         help="number of time bins the time series is split into for folding.")
@@ -245,7 +251,7 @@ def CL_parser():
         "Note: None really does nothing.")
     d_parser.add_argument(
         '--fref', type=float, default=_fref,
-        help="ref. freq. for dispersion measure")
+        help="reference frequency for dispersion measure")
 
     parser.add_argument('-v', '--verbose', action='append_const', const=1)
     return parser.parse_args()
@@ -266,11 +272,9 @@ if __name__ == '__main__':
         # (previously args.nchan = 20)
         args.nchan = None
         args.ngate = 512
-        args.date = '2014-01-20T22:30:00'
         args.ntw_min = 1020
         args.waterfall = False
         args.verbose += 1
-        args.dedisperse = 'incoherent'
         args.rfi_filter_raw = None
 
     elif args.reduction_defaults == 'kairo':
