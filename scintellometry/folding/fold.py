@@ -12,7 +12,7 @@ try:
     # pyfftw.interfaces.cache.enable()
     from pyfftw.interfaces.scipy_fftpack import (rfft, rfftfreq, irfft,
                                                  fft, ifft, fftfreq)
-    _fftargs = {'threads': os.environ.get('OMP_NUM_THREADS', 2),
+    _fftargs = {'threads': int(os.environ.get('OMP_NUM_THREADS', 2)),
                 'planner_effort': 'FFTW_ESTIMATE'}
 except(ImportError):
     print("Consider installing pyfftw: https://github.com/hgomersall/pyFFTW")
@@ -65,7 +65,7 @@ def fold(fh, comm, samplerate, fedge, fedge_at_top, nchan,
         reference frequency for dispersion measure
     phasepol : callable
         function that returns the pulsar phase for time in seconds relative to
-        start of part of the file that is read (i.e., ignoring nhead)
+        start of the file that is read.
     dedisperse : None or string (default: incoherent).
         None, 'incoherent', 'coherent', 'by-channel'.
         Note: None really does nothing
@@ -79,6 +79,8 @@ def fold(fh, comm, samplerate, fedge, fedge_at_top, nchan,
         return a subint fits table for rank == 0 (None otherwise)
 
     """
+    assert dedisperse in (None, 'incoherent', 'by-channel', 'coherent')
+
     if comm is None:
         rank = 0
         size = 1
@@ -174,8 +176,9 @@ def fold(fh, comm, samplerate, fedge, fedge_at_top, nchan,
 
     for j in xrange(rank, nt, size):
         if verbose and j % progress_interval == 0:
-            print('Doing {:6d}/{:6d}; time={:18.12f}'.format(
-                j+1, nt, (tstart+dtsample*j*ntint).value))  # time since start
+            print('#{}/{} is doing {:6d}/{:6d}; time={:18.12f}'.format(
+                rank, size, j+1, nt,
+                (tstart+dtsample*j*ntint).value))  # time since start
 
         # just in case numbers were set wrong -- break if file ends
         # better keep at least the work done
@@ -190,7 +193,7 @@ def fold(fh, comm, samplerate, fedge, fedge_at_top, nchan,
             print("Hit {0!r}; writing pgm's".format(exc))
             break
         if verbose >= 2:
-            print("Read {} items".format(raw.size), end="")
+            print("#{}/{} read {} items".format(rank, size, raw.size), end="")
 
         if rfi_filter_raw is not None:
             raw, ok = rfi_filter_raw(raw, nchan)
@@ -257,8 +260,6 @@ def fold(fh, comm, samplerate, fedge, fedge_at_top, nchan,
                     t = tsample - dt[k]  # dedispersed times
                 elif dedisperse is None:
                     t = tsample  # do nothing
-                else:
-                    t = tsample - dt[k]
 
                 phase = phasepol(t)  # corresponding PSR phases
                 iphase = np.remainder(phase*ngate,
@@ -275,7 +276,7 @@ def fold(fh, comm, samplerate, fedge, fedge_at_top, nchan,
             print("... done")
 
     if verbose >= 2 or verbose and rank == 0:
-        print('read {0:6d} out of {1:6d}'.format(j+1, nt))
+        print('#{}/{} read {0:6d} out of {1:6d}'.format(rank, size, j+1, nt))
 
     if return_fits and rank == 0:
         # subintu HDU

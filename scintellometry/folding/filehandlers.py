@@ -232,7 +232,8 @@ class AROdata(MultiFile):
     telescope = 'aro'
 
     def __init__(self, sequence_file, raw_voltage_files, blocksize=2**25,
-                 dtype='4bit', samplerate=200.*u.MHz, comm=None):
+                 dtype='4bit', samplerate=200.*u.MHz,
+                 utc_offset=-4.*u.hr, comm=None):
 
         self.sequence_file = sequence_file
         seq, indices = np.loadtxt(sequence_file, np.int32, unpack=True)
@@ -248,7 +249,7 @@ class AROdata(MultiFile):
         if arodate:
             isot = arodate.group()
             # convert time to UTC; dates given in EDT
-            self.time0 = Time(isot, scale='utc') + 4*u.hr
+            self.time0 = Time(isot, scale='utc') - utc_offset
             # ARO time is off by two 32MiB record or 128Misamples
             self.time0 -= (2.**27/samplerate).to(u.s)
         else:
@@ -604,15 +605,14 @@ class GMRTdata(MultiFile):
 
     telescope = 'gmrt'
 
-    def __init__(self, timestamp_file,
-                 raw_files, blocksize=2**22, dtype='ci1', nchan=512,
-                 utc_offset=5.5*u.hr,
-                 samplerate=100./3.*u.MHz, fedge=156.*u.MHz,
-                 fedge_at_top=True, comm=None):
-        # GMRT phased data stored in blocks holding 0.25 s worth of data,
-        # separated over two streams (eacg with 0.125s).  For 16MHz BW, each
-        # block is 4 MiB with 2Mi complex samples split in 256 or 512 channels;
-        # complex samples consist of two signed ints (custom 'ci1' dtype).
+    def __init__(self, timestamp_file, raw_files, blocksize, nchan,
+                 samplerate, fedge, fedge_at_top, dtype='ci1',
+                 utc_offset=5.5*u.hr, comm=None):
+        """GMRT phased data stored in blocks holding 0.25 s worth of data,
+        separated over two streams (each with 0.125s).  For 16MHz BW, each
+        block is 4 MiB with 2Mi complex samples split in 256 or 512 channels;
+        complex samples consist of two signed ints (custom 'ci1' dtype).
+        """
         self.samplerate = samplerate
         self.fedge = fedge
         self.fedge_at_top = fedge_at_top
@@ -728,6 +728,10 @@ def read_timestamp_file(filename, utc_offset=5.5*u.hr):
     timestamps = np.genfromtxt(filename, dtype=dtype,
                                delimiter=(19, 10, 20, 12, 5, 2),  # col lengths
                                converters={0: str2iso, 2: str2iso})
+
+    # check if last line was corrupted
+    if timestamps[-1]['sub'] < 0:
+        timestamps = timestamps[:-1]
 
     # should have continuous series, of subintegrations at least
     assert np.all(np.diff(timestamps['sub']) % 8 == 1)  # either 1 or -7
