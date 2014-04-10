@@ -624,6 +624,9 @@ class GMRTdata(MultiFile):
 
         self.timestamp_file = timestamp_file
 
+        if comm.rank == 0:
+            print("In GMRTdata, just before read_timestamp_file({0}, {1})"
+                  .format(timestamp_file, utc_offset))
         self.indices, self.timestamps, self.gsb_start = read_timestamp_file(
             timestamp_file, utc_offset)
         self.time0 = self.timestamps[0]
@@ -631,7 +634,8 @@ class GMRTdata(MultiFile):
         self.time0 -= (2.**25/samplerate).to(u.s)
 
         self.dtsample = (nchan * 2 / samplerate).to(u.s)
-
+        if comm.rank == 0:
+            print("In GMRTdata, calling super")
         super(GMRTdata, self).__init__(raw_files, blocksize, dtype, nchan,
                                        comm=comm)
 
@@ -714,46 +718,42 @@ def read_timestamp_file(filename, utc_offset=5.5*u.hr):
     having interpolated the times for the second data stream.
     """
 
-    pc_times = []
-    gps_times = []
-    ist_utc = TimeDelta(utc_offset)
-    prevseq = prevsub = -1
-    with open(filename) as fh:
-        line = fh.readline()
-        while line != '':
-            # convert the line to PC_int_sec_iso, PC_frac_sec,
-            # GPS_int_sec_iso, GPS_frac_sec, seq, sub
-            strings = ('{}-{}-{}T{}:{}:{} {} {}-{}-{}T{}:{}:{} {} {} {}'
-                       .format(*line.split())).split()
-            seq = int(strings[4])
-            sub = int(strings[5])
-            # check seq, sub increase monotonically
-            if prevseq > 0:
-                assert seq == prevseq+1
-                assert sub == (prevsub+1) % 8
-            prevseq, prevsub = seq, sub
-            # construct PC and GPS time, adding the int-sec and frac-sec parts
-            # and also correcting for the time zone
-            time = (Time([strings[0], strings[2]], scale='utc') +
-                    TimeDelta([float(strings[1]), float(strings[3])],
-                              format='sec')) - ist_utc
-            pc_times += [time[0]]
-            gps_times += [time[1]]  # add half a step below
+    utc_offset = TimeDelta(utc_offset)
 
-            line = fh.readline()
+    str2iso = lambda str: '{}-{}-{}T{}:{}:{}'.format(
+        str[:4], str[5:7], str[8:10], str[11:13], str[14:16], str[17:19])
+    dtype = np.dtype([('pc', 'S19'), ('pc_frac', np.float),
+                      ('gps', 'S19'), ('gps_frac', np.float),
+                      ('seq', np.int), ('sub', np.int)])
+    timestamps = np.genfromtxt(filename, dtype=dtype,
+                               delimiter=(19, 10, 20, 12, 5, 2),  # col lengths
+                               converters={0: str2iso, 2: str2iso})
 
-    indices = np.array(len(gps_times)*[0, 1], dtype=np.int8)
+    # should have continuous series
+    assert np.all(np.diff(timestamps['seq']) == 1)
+    assert np.all(np.diff(timestamps['sub']) % 8 == 1)  # either 1 or -7
 
-    pc_times = Time(pc_times)
-    gps_times = Time(gps_times)
+    pc_times = (Time(timestamps['pc'], scale='utc', format='isot') +
+                TimeDelta(timestamps['pc_frac'], format='sec') - utc_offset)
+    gps_times = (Time(timestamps['gps'], scale='utc', format='isot') +
+                 TimeDelta(timestamps['gps_frac'], format='sec') - utc_offset)
+
     gps_pc = gps_times - pc_times
     assert np.allclose(gps_pc.sec, gps_pc[0].sec, atol=2.e-3)
+
+    # time differences between subsequent samples should be (very) similar
     dt = gps_times[1:] - gps_times[:-1]
     assert np.allclose(dt.sec, dt[0].sec, atol=1.e-5)
-    gsb_start = gps_times[-1] - seq * dt[0]  # should be whole minute
+
+    # GSB should have started on whole minute
+    gsb_start = gps_times[-1] - timestamps[-1]['seq'] * dt[0]
     assert '00.000' in gsb_start.isot
 
-    timestamps = Time([t + i * dt[0] / 2. for t in gps_times for i in (0,1)])
+    indices = np.repeat([[0,1]], len(gps_times), axis=0).flatten()
+    # double the number of timestamps
+    timestamps = Time(np.repeat(gps_times.jd1, 2), np.repeat(gps_times.jd2, 2),
+                      format='jd', scale='utc', precision=9)
+    timestamps = timestamps + indices * (dt[0] / 2.)
 
     return indices, timestamps, gsb_start
 
