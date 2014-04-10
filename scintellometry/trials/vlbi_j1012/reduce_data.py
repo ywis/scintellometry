@@ -61,7 +61,14 @@ def reduce(telescope, obskey, tstart, tend, nchan, ngate, ntbin,
     elif telescope == 'gmrt':
         GenericOpen = GMRTdata
 
+    if verbose and comm.rank == 0:
+        print("Attempting to open files {0}".format(files))
+        print("GenericOpen={0}\n setup={1}".format(GenericOpen, setup))
+
     with GenericOpen(*files, comm=comm, **setup) as fh:
+        if verbose and comm.rank == 0:
+            print("Opened all files")
+
         # nchan = None means data is channelized already, so we get this
         # property directly from the file
         if nchan is None or telescope == 'lofar':
@@ -79,6 +86,10 @@ def reduce(telescope, obskey, tstart, tend, nchan, ngate, ntbin,
             dt = TimeDelta(float(tend), format='sec')
             tend = tstart + dt
 
+        if verbose and comm.rank == 0:
+            print("Requested time span: {0} to {1}".format(tstart.isot,
+                                                           tend.isot))
+
         phasepol = Obs[telescope][obskey].get_phasepol(time0)
         nt = fh.ntimebins(tstart, tend)
         ntint = fh.ntint(nchan)
@@ -86,14 +97,16 @@ def reduce(telescope, obskey, tstart, tend, nchan, ngate, ntbin,
         ntw = min(ntw_min, nt*ntint)
         # number of records to skip
 
-        fh.seek(tstart)
         if verbose and comm.rank == 0:
             print("Using start time {0} and phase polynomial {1}"
-                  .format(time0, phasepol))
+                  .format(time0.isot, phasepol))
             print("Skipping {0} blocks and folding {1} blocks to cover "
                   "time span {2} to {3}"
-                  .format(fh.offset/fh.blocksize, nt, fh.time(),
-                          fh.time(fh.offset + nt*fh.blocksize)))
+                  .format(fh.offset/fh.blocksize, nt, fh.time().isot,
+                          fh.time(fh.offset + nt*fh.blocksize).isot))
+
+        fh.seek(tstart)
+
         # set the default parameters to fold
         # Note, some parameters may be in fh's HDUs, or fh.__getitem__
         # but these are overwritten if explicitly sprecified in Folder
@@ -115,7 +128,7 @@ def reduce(telescope, obskey, tstart, tend, nchan, ngate, ntbin,
         if comm.rank == 0:
             # waterfall = normalize_counts(waterfall)
             np.save("{0}waterfall_{1}+{2:08}sec.npy"
-                    .format(savepref, tstart, dt.sec), waterfall)
+                    .format(savepref, tstart.isot, dt.sec), waterfall)
 
     if do_foldspec:
         foldspec = np.zeros_like(myfoldspec)
@@ -125,8 +138,8 @@ def reduce(telescope, obskey, tstart, tend, nchan, ngate, ntbin,
         if comm.rank == 0:
             fname = ("{0}foldspec_{1}+{2:08}sec.npy")
             iname = ("{0}icount_{1}+{2:08}sec.npy")
-            np.save(fname.format(savepref, tstart, dt.sec), foldspec)
-            np.save(iname.format(savepref, tstart, dt.sec), icount)
+            np.save(fname.format(savepref, tstart.isot, dt.sec), foldspec)
+            np.save(iname.format(savepref, tstart.isot, dt.sec), icount)
 
             # get normalized flux in each bin (where any were added)
             f2 = normalize_counts(foldspec, icount)
@@ -135,7 +148,7 @@ def reduce(telescope, obskey, tstart, tend, nchan, ngate, ntbin,
             foldspec3 = f2.sum(axis=0)
 
             with open('{0}flux_{1}+{2:08}sec.dat'
-                      .format(savepref, tstart, dt.sec), 'w') as f:
+                      .format(savepref, tstart.isot, dt.sec), 'w') as f:
                 for i, flux in enumerate(fluxes):
                     f.write('{0:12d} {1:12.9g}\n'.format(i+1, flux))
 
@@ -144,19 +157,19 @@ def reduce(telescope, obskey, tstart, tend, nchan, ngate, ntbin,
         if do_waterfall:
             w = waterfall.copy()
             pmap('{0}waterfall_{1}+{2:08}sec.pgm'
-                 .format(savepref, tstart, dt.sec), w, 1, verbose=True)
+                 .format(savepref, tstart.isot, dt.sec), w, 1, verbose=True)
         if do_foldspec:
             pmap('{0}folded_{1}+{2:08}sec.pgm'
-                 .format(savepref, tstart, dt.sec), foldspec1, 0, verbose)
+                 .format(savepref, tstart.isot, dt.sec), foldspec1, 0, verbose)
             # TODO: Note, I (aaron) don't think this works for LOFAR data
             # since nchan=20, but we concatenate several subband files
             # together, so f2.nchan = N_concat * nchan
             # It should work for my "new" LOFAR_Pconcate file class
             pmap('{0}foldedbin_{1}+{2:08}sec.pgm'
-                 .format(savepref, tstart, dt.sec),
+                 .format(savepref, tstart.isot, dt.sec),
                  f2.transpose(0,2,1).reshape(nchan,-1), 1, verbose)
             pmap('{0}folded3_{1}+{2:08}sec.pgm'
-                 .format(savepref, tstart, dt.sec), foldspec3, 0, verbose)
+                 .format(savepref, tstart.isot, dt.sec), foldspec3, 0, verbose)
 
     savefits = False
     if savefits and comm.rank == 0:
@@ -175,7 +188,8 @@ def reduce(telescope, obskey, tstart, tend, nchan, ngate, ntbin,
         f2 = f2.reshape(ntbin, np.newaxis, nchan, ngate)
         std = f2.std(axis=0)
         subint_table[1].data.field('DATA')[:] = (2**16*f2/std).astype(np.int16)
-        fout = '{0}folded3_{1}+{2:08}sec.fits'.format(savepref, tstart, dt.sec)
+        fout = ('{0}folded3_{1}+{2:08}sec.fits'
+                .format(savepref, tstart.isot, dt.sec))
         # Note: output_verify != 'ignore' resets the cards for some reason
         try:
             subint_table.writeto(fout, output_verify='ignore', clobber=True)
@@ -286,7 +300,7 @@ if __name__ == '__main__':
         # 17000 /(100.*u.MHz/3.) * 512 = 0.52224 s
         args.ntw_min = 17000
         args.rfi_filter_raw = None
-        args.waterfall = True
+        args.waterfall = False
         args.verbose += 1
     reduce(
         args.telescope, args.date, tstart=args.starttime, tend=args.endtime,
