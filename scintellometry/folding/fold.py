@@ -274,7 +274,7 @@ def fold(fh, comm, samplerate, fedge, fedge_at_top, nchan,
         if verbose >= 2:
             print("... done")
 
-    if verbose:
+    if verbose >= 2 or verbose and rank == 0:
         print('read {0:6d} out of {1:6d}'.format(j+1, nt))
 
     if return_fits and rank == 0:

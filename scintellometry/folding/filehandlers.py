@@ -729,8 +729,7 @@ def read_timestamp_file(filename, utc_offset=5.5*u.hr):
                                delimiter=(19, 10, 20, 12, 5, 2),  # col lengths
                                converters={0: str2iso, 2: str2iso})
 
-    # should have continuous series
-    assert np.all(np.diff(timestamps['seq']) == 1)
+    # should have continuous series, of subintegrations at least
     assert np.all(np.diff(timestamps['sub']) % 8 == 1)  # either 1 or -7
 
     pc_times = (Time(timestamps['pc'], scale='utc', format='isot') +
@@ -739,23 +738,39 @@ def read_timestamp_file(filename, utc_offset=5.5*u.hr):
                  TimeDelta(timestamps['gps_frac'], format='sec') - utc_offset)
 
     gps_pc = gps_times - pc_times
-    assert np.allclose(gps_pc.sec, gps_pc[0].sec, atol=2.e-3)
+    assert np.allclose(gps_pc.sec, gps_pc[0].sec, atol=5.e-3)
 
-    # time differences between subsequent samples should be (very) similar
+    # GSB should have started on whole minute
+    gsb_start = gps_times[0] - timestamps[0]['seq'] * (gps_times[1] -
+                                                       gps_times[0])
+    assert '00.000' in gsb_start.isot
+
+    # still, the sequence can have holes of 8, which need to be filled
+    seq = timestamps['seq']
+    dseq = np.diff(seq)
+    holes = np.where(dseq > 1)
+    # hole points to time just before hole
+    for hole in holes[0][::-1]:  # reverse order since we are adding stuff
+        hole_dt = gps_times[hole+1] - gps_times[hole]
+        hole_frac = np.arange(1, dseq[hole], dtype=np.int) / float(dseq[hole])
+        hole_times = gps_times[hole] + hole_frac * hole_dt
+        gps_times = Time([gps_times[:hole+1], hole_times,
+                          gps_times[hole+1:]])
+        seq = np.hstack((seq[:hole+1], -np.ones(len(hole_frac)), seq[hole+1:]))
+
+    # time differences between subsequent samples should now be (very) similar
     dt = gps_times[1:] - gps_times[:-1]
     assert np.allclose(dt.sec, dt[0].sec, atol=1.e-5)
 
-    # GSB should have started on whole minute
-    gsb_start = gps_times[-1] - timestamps[-1]['seq'] * dt[0]
-    assert '00.000' in gsb_start.isot
-
-    indices = np.repeat([[0,1]], len(gps_times), axis=0).flatten()
+    indices = np.repeat([[0,1]], len(gps_times), axis=0)
     # double the number of timestamps
-    timestamps = Time(np.repeat(gps_times.jd1, 2), np.repeat(gps_times.jd2, 2),
-                      format='jd', scale='utc', precision=9)
-    timestamps = timestamps + indices * (dt[0] / 2.)
+    times = Time(np.repeat(gps_times.jd1, 2), np.repeat(gps_times.jd2, 2),
+                 format='jd', scale='utc', precision=9)
+    times = times + indices.flatten() * (dt[0] / 2.)
+    # mark bad indices
+    indices[seq < 0] = np.array([-1,-1])
 
-    return indices, timestamps, gsb_start
+    return indices.flatten(), times, gsb_start
 
 
 #   __ __  ______  ____  _     _____
