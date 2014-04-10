@@ -87,12 +87,13 @@ def reduce(telescope, obskey, tstart, tend, nchan, ngate, ntbin, ntw_min,
         if verbose and comm.rank == 0:
             print("Using start time {0} and phase polynomial {1}"
                   .format(time0.isot, phasepol))
-            print("Skipping {0} blocks and folding {1} blocks to cover "
+
+        fh.seek(tstart)
+        if verbose and comm.rank == 0:
+            print("Skipped {0} blocks and will fold {1} blocks to cover "
                   "time span {2} to {3}"
                   .format(fh.offset/fh.blocksize, nt, fh.time().isot,
                           fh.time(fh.offset + nt*fh.blocksize).isot))
-
-        fh.seek(tstart)
 
         # set the default parameters to fold
         # Note, some parameters may be in fh's HDUs, or fh.__getitem__

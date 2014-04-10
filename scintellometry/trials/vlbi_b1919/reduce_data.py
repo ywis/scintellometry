@@ -40,7 +40,6 @@ if __name__ == '__main__':
         # (previously args.nchan = 20)
         args.nchan = None
         args.ngate = 512
-        args.date = '2013-07-25'
         args.ntbin = 5
         args.ntw_min = 1020
         args.waterfall = True
@@ -57,7 +56,6 @@ if __name__ == '__main__':
 
     elif args.reduction_defaults == 'gmrt':
         args.telescope = 'gmrt'
-        args.date = '2013-07-25'  # Note, gmrt dates made up for now
         args.nchan = 512
         args.ngate = 512
         args.ntbin = 5
