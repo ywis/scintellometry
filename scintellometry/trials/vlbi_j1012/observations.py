@@ -32,7 +32,7 @@ def obsdata(conf='observations.conf'):
 
 class telescope(dict):
     def __init__(self, name):
-        assert name in ['kairo', 'lofar', 'gmrt']
+        assert name in ['aro', 'lofar', 'gmrt']
         self['name'] = name
         self['observations'] = []
 
@@ -54,7 +54,8 @@ class telescope(dict):
         if dts[dtmin] > 1.:
             tmplt = ("Warning, nearest observation {0} is more than 1 second "
                      "away from request time {1}")
-            raise Warning(tmplt.format(key, str(t)))
+            print(tmplt.format(key, str(t)))
+            # raise Warning(tmplt.format(key, str(t)))
         return key
 
     def file_list(self, key, **kwargs):
