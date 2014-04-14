@@ -82,8 +82,12 @@ class MultiFile(psrFITS):
                 os.unlink(fh)
 
     def read(self, size):
-        """Read at most size bytes, returning an ndarray with np.int8 dtype.
-        Incorporate information from multiple underlying files if necessary"""
+        """Read size bytes, returning an ndarray with np.int8 dtype.
+
+        Incorporate information from multiple underlying files if necessary.
+        The individual file pointers are assumed to be pointing at the right
+        locations, i.e., just before data that will be read here.
+        """
         if size % self.recordsize != 0:
             raise ValueError("Cannot read a non-integer number of records")
 
@@ -94,6 +98,7 @@ class MultiFile(psrFITS):
 
         # allocate buffer for MPI read
         z = np.empty(size, dtype=np.int8)
+
         # read one or more pieces
         iz = 0
         while(iz < size):
@@ -141,15 +146,21 @@ class MultiFile(psrFITS):
             raise ValueError("Cannot offset to non-integer number of records")
         # determine index in units of the blocksize
         block, extra = divmod(offset, self.blocksize)
+        if block > len(self.indices):
+            raise EOFError('At end of file in MultiFile.read')
+
+        # check how many of the indices preceding the block were in each file
         indices = self.indices[:block]
         fh_offsets = np.bincount(indices[indices >= 0],
                                  minlength=len(self.fh_raw)) * self.blocksize
-        if block > len(self.indices):
-            raise EOFError('At end of file in MultiFile.read')
+        # add the extra bytes to the correct file
         if self.indices[block] >= 0:
             fh_offsets[self.indices[block]] += extra
+
+        # actual seek in files
         for fh, fh_offset in zip(self.fh_raw, fh_offsets):
             fh.Seek(fh_offset)
+
         self.offset = offset
 
     def tell(self, offset=None, unit=None):
@@ -353,8 +364,17 @@ class LOFARdata(MultiFile):
         h0 = HDF5File(raw_files[0].replace('.raw', '.h5'), 'r')
         saps = sorted([i for i in h0.keys() if 'SUB_ARRAY_POINTING' in i])
         s0 = h0[saps[0]]
-        time0 = Time(s0.attrs['EXPTIME_START_UTC'].replace('Z',''),
-                     scale='utc')
+        # string headers have problems on BGQ
+        try:
+            time0 = Time(s0.attrs['EXPTIME_START_UTC'].replace('Z',''),
+                         scale='utc')
+        except KeyError:
+            time0 = Time(s0.attrs['EXPTIME_START_MJD'], format='mjd',
+                         scale='utc', precision=3)
+            # should start on whole minute
+            assert time0.isot.endswith('00.000')
+            # ensure we have the time to double-float rounding precision
+            time0 = Time(time0.isot, scale='utc')
 
         beams = sorted([i for i in s0.keys() if 'BEAM' in i])
         b0 = s0[beams[0]]
@@ -364,16 +384,25 @@ class LOFARdata(MultiFile):
         nchan = len(frequencies)  # = st0.attrs['NOF_SUBBANDS']
         blocksize *= nchan
         # can also get from np.diff(frequencies.diff).mean()
-        fwidth = u.Quantity(b0.attrs['SUBBAND_WIDTH'],
-                            b0.attrs['CHANNEL_WIDTH_UNIT']).to(u.MHz)
+        try:
+            fwidth = u.Quantity(b0.attrs['SUBBAND_WIDTH'],
+                                b0.attrs['CHANNEL_WIDTH_UNIT']).to(u.MHz)
 
-        samplerate = u.Quantity(b0.attrs['SAMPLING_RATE'],
-                                b0.attrs['SAMPLING_RATE_UNIT']).to(u.MHz)
+            samplerate = u.Quantity(b0.attrs['SAMPLING_RATE'],
+                                    b0.attrs['SAMPLING_RATE_UNIT']).to(u.MHz)
+        except KeyError:  # BGQ; assume it is Hz
+            fwidth = u.Quantity(b0.attrs['SUBBAND_WIDTH'] * u.Hz).to(u.MHz)
+
+            samplerate = u.Quantity(b0.attrs['SAMPLING_RATE'] * u.Hz).to(u.MHz)
 
         stokes = sorted([i for i in b0.keys()
                          if 'STOKES' in i and 'i2f' not in i])
         st0 = b0[stokes[0]]
-        dtype = _lofar_dtypes[st0.attrs['DATATYPE']]
+        try:
+            dtype = _lofar_dtypes[st0.attrs['DATATYPE']]
+        except KeyError:
+            dtype = _lofar_dtypes['int8' if any('i2f' in i for i in b0.keys())
+                                  else 'float']
 
         if dtype == 'ci1' and refloat:  # compressed LOFAR file
             # convert to float on-the-fly; ensure we look like float file
@@ -480,12 +509,13 @@ class LOFARdata_Pcombined(MultiFile):
     """
     telescope = 'lofar'
 
-    def __init__(self, raw_files_list, comm=None):
+    def __init__(self, raw_files_list, comm=None, **kwargs):
         """
         A list of tuples, to be 'concatenated' together
         (as returned by observations.obsdata[telescope].file_list(obskey) )
         """
         super(LOFARdata_Pcombined, self).__init__(raw_files_list, comm=comm)
+        self.per_channel_blocksize = kwargs.pop('blocksize', 2**22)
         self.fbottom = self.frequencies[0]
         self.fedge = self.frequencies[0]
         self.fedge_at_top = False
@@ -496,7 +526,8 @@ class LOFARdata_Pcombined(MultiFile):
         self['PRIMARY'].header.update('NCHAN', self.nchan)
 
     def open(self, raw_files_list):
-        self.fh_raw = [LOFARdata(raw_files, comm=self.comm)
+        self.fh_raw = [LOFARdata(raw_files, comm=self.comm,
+                                 blocksize=getattr(self, 'per_channel_blocksize', 2**18))
                        for raw_files in raw_files_list]
         self.fh_links = []
         # make sure basic properties of the files are the same
@@ -646,7 +677,7 @@ class GMRTdata(MultiFile):
         return ("<open two raw_voltage_files {} "
                 "using timestamp file '{}' at index {} (time {})>"
                 .format(self.fh_raw, self.timestamp_file, self.offset,
-                        self.time()))
+                        self.time().iso))
 
 # GMRT defaults for psrfits HDUs
 # Note: these are largely made-up at this point

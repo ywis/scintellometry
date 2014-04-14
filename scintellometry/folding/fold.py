@@ -89,10 +89,18 @@ def fold(fh, comm, samplerate, fedge, fedge_at_top, nchan,
         size = comm.size
 
     # initialize folded spectrum and waterfall
-    foldspec = np.zeros((nchan, ngate, ntbin))
-    icount = np.zeros((nchan, ngate, ntbin), dtype=np.int64)
-    nwsize = nt*ntint//ntw
-    waterfall = np.zeros((nchan, nwsize))
+    if do_foldspec:
+        foldspec = np.zeros((nchan, ngate, ntbin))
+        icount = np.zeros((nchan, ngate, ntbin), dtype=np.int64)
+    else:
+        foldspec = None
+        icount = None
+
+    if do_waterfall:
+        nwsize = nt*ntint//ntw
+        waterfall = np.zeros((nchan, nwsize))
+    else:
+        waterfall = None
 
     if verbose and rank == 0:
         print('Reading from {}'.format(fh))
@@ -176,7 +184,7 @@ def fold(fh, comm, samplerate, fedge, fedge_at_top, nchan,
 
     for j in xrange(rank, nt, size):
         if verbose and j % progress_interval == 0:
-            print('#{}/{} is doing {:6d}/{:6d}; time={:18.12f}'.format(
+            print('#{:4d}/{:4d} is doing {:6d}/{:6d}; time={:18.12f}'.format(
                 rank, size, j+1, nt,
                 (tstart+dtsample*j*ntint).value))  # time since start
 
@@ -193,7 +201,8 @@ def fold(fh, comm, samplerate, fedge, fedge_at_top, nchan,
             print("Hit {0!r}; writing pgm's".format(exc))
             break
         if verbose >= 2:
-            print("#{}/{} read {} items".format(rank, size, raw.size), end="")
+            print("#{:4d}/{:4d} read {} items".format(rank, size, raw.size),
+                  end="")
 
         if rfi_filter_raw is not None:
             raw, ok = rfi_filter_raw(raw, nchan)
@@ -276,7 +285,8 @@ def fold(fh, comm, samplerate, fedge, fedge_at_top, nchan,
             print("... done")
 
     if verbose >= 2 or verbose and rank == 0:
-        print('#{}/{} read {0:6d} out of {1:6d}'.format(rank, size, j+1, nt))
+        print('#{:4d}/{:4d} read {:6d} out of {:6d}'
+              .format(rank, size, j+1, nt))
 
     if return_fits and rank == 0:
         # subintu HDU
