@@ -62,9 +62,7 @@ if __name__ == '__main__':
         # 170 /(100.*u.MHz/6.) * 512 = 0.0052224 s = 256 bins/pulse
         args.ntw_min = 170
         args.rfi_filter_raw = None
-        args.waterfall = True
         args.verbose += 1
-        args.dedisperse = 'incoherent'
     reduce(
         args.telescope, args.date, tstart=args.starttime, tend=args.endtime,
         nchan=args.nchan, ngate=args.ngate, ntbin=args.ntbin,
