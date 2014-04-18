@@ -58,12 +58,15 @@ def reduce(telescope, obskey, tstart, tend, nchan, ngate, ntbin, ntw_min,
 
         # nchan = None means data is channelized already, so we get this
         # property directly from the file
-        if nchan is None or telescope == 'lofar':
-            if telescope == 'lofar' and comm.rank == 0:
-                print("LOFAR data already channelized: overriding nchan to {0}"
-                      "\n\t as configured in observations.conf"
-                      .format(fh.nchan))
+        if nchan is None:
             nchan = fh.nchan
+        # ensure requested number of channels is integer multiple of
+        # existing channels
+        if nchan % getattr(fh, 'nchan', 1) != 0:
+            raise ValueError("Can only channelize data to an integer multiple "
+                             "of the number of input channels (={0})."
+                             .format(fh.nchan))
+
         time0 = fh.time0
         tstart = time0 if tstart is None else Time(tstart, scale='utc')
         try:
@@ -106,7 +109,7 @@ def reduce(telescope, obskey, tstart, tend, nchan, ngate, ntbin, ntw_min,
                         verbose=verbose, progress_interval=1,
                         rfi_filter_raw=rfi_filter_raw,
                         rfi_filter_power=None)
-        myfoldspec, myicount, mywaterfall, subint_table = folder(fh, comm=comm)
+        myfoldspec, myicount, mywaterfall = folder(fh, comm=comm)
     # end with
 
     savepref = "{0}{1}_{2}chan{3}ntbin".format(telescope, psr, nchan, ntbin)
@@ -120,25 +123,29 @@ def reduce(telescope, obskey, tstart, tend, nchan, ngate, ntbin, ntw_min,
 
     if do_foldspec:
         foldspec = np.zeros_like(myfoldspec)
-        icount = np.zeros_like(myicount)
         comm.Reduce(myfoldspec, foldspec, op=MPI.SUM, root=0)
+        del myfoldspec  # save memory on node 0
+        icount = np.zeros_like(myicount)
         comm.Reduce(myicount, icount, op=MPI.SUM, root=0)
+        del myicount  # save memory on node 0
         if comm.rank == 0:
             fname = ("{0}foldspec_{1}+{2:08}sec.npy")
-            iname = ("{0}icount_{1}+{2:08}sec.npy")
             np.save(fname.format(savepref, tstart.isot, dt.sec), foldspec)
+            iname = ("{0}icount_{1}+{2:08}sec.npy")
             np.save(iname.format(savepref, tstart.isot, dt.sec), icount)
 
-            # get normalized flux in each bin (where any were added)
-            f2 = normalize_counts(foldspec, icount)
-            foldspec1 = f2.sum(axis=2)
+            foldspec1 = normalize_counts(foldspec.sum(0).astype(np.float64),
+                                         icount.sum(0).astype(np.int64))
+            foldspec3 = normalize_counts(foldspec.sum(1).astype(np.float64),
+                                         icount.sum(1).astype(np.int64))
             fluxes = foldspec1.sum(axis=0)
-            foldspec3 = f2.sum(axis=0)
-
             with open('{0}flux_{1}+{2:08}sec.dat'
                       .format(savepref, tstart.isot, dt.sec), 'w') as f:
                 for i, flux in enumerate(fluxes):
                     f.write('{0:12d} {1:12.9g}\n'.format(i+1, flux))
+            # ratio'd flux only if file will not be ridiculously large
+            if ntbin*ngate < 10000:
+                foldspec2 = normalize_counts(foldspec, icount)
 
     plots = True
     if plots and comm.rank == 0:
@@ -149,43 +156,43 @@ def reduce(telescope, obskey, tstart, tend, nchan, ngate, ntbin, ntw_min,
         if do_foldspec:
             pmap('{0}folded_{1}+{2:08}sec.pgm'
                  .format(savepref, tstart.isot, dt.sec), foldspec1, 0, verbose)
-            # TODO: Note, I (aaron) don't think this works for LOFAR data
-            # since nchan=20, but we concatenate several subband files
-            # together, so f2.nchan = N_concat * nchan
-            # It should work for my "new" LOFAR_Pconcate file class
-            pmap('{0}foldedbin_{1}+{2:08}sec.pgm'
-                 .format(savepref, tstart.isot, dt.sec),
-                 f2.transpose(0,2,1).reshape(nchan,-1), 1, verbose)
             pmap('{0}folded3_{1}+{2:08}sec.pgm'
-                 .format(savepref, tstart.isot, dt.sec), foldspec3, 0, verbose)
+                 .format(savepref, tstart.isot, dt.sec),
+                 foldspec3.T, 0, verbose)
+            # ratio'd flux only if file will not be ridiculously large
+            if ntbin*ngate < 10000:
+                pmap('{0}foldedbin_{1}+{2:08}sec.pgm'
+                     .format(savepref, tstart.isot, dt.sec),
+                     foldspec2.transpose(1,2,0).reshape(nchan,-1), 1, verbose)
 
-    savefits = False
-    if savefits and comm.rank == 0:
-        print("Saving FITS files...")
-        # assign the folded data ( [f2] = [nchan, ngate, ntbin]
-        #                          want [ntbin, npol, nchan, ngate]
+    # savefits = False
+    # if savefits and comm.rank == 0:
+    #     print("Saving FITS files...")
+    #     # assign the folded data ( [f2] = [nchan, ngate, ntbin]
+    #     #                          want [ntbin, npol, nchan, ngate]
 
-        # TODO: figure out lofar and aro data, which concatenates the channels
-        # so f2 = len(range(P))*nchan
-        if telescope == 'lofar':
-            f2 = f2[-nchan:]
-        elif telescope == 'aro':
-            f2 = f2[0:nchan]
-        nchan, ngate, ntbin = f2.shape
-        f2 = f2.transpose(2, 0, 1)
-        f2 = f2.reshape(ntbin, np.newaxis, nchan, ngate)
-        std = f2.std(axis=0)
-        subint_table[1].data.field('DATA')[:] = (2**16*f2/std).astype(np.int16)
-        fout = ('{0}folded3_{1}+{2:08}sec.fits'
-                .format(savepref, tstart.isot, dt.sec))
-        # Note: output_verify != 'ignore' resets the cards for some reason
-        try:
-            subint_table.writeto(fout, output_verify='ignore', clobber=True)
-        except ValueError:
-            print("FITS writings is a work in progress: "
-                  "need to come to terms with array shapes")
-            print("f2.shape, subint_table[1].data.field('DATA')[:].shape = ",
-                  f2.shape, subint_table[1].data.field('DATA')[:].shape)
+    #     # TODO: figure out lofar and aro data, which concatenates channels
+    #     # so f2 = len(range(P))*nchan
+    #     if telescope == 'lofar':
+    #         f2 = f2[-nchan:]
+    #     elif telescope == 'aro':
+    #         f2 = f2[0:nchan]
+    #     nchan, ngate, ntbin = f2.shape
+    #     f2 = f2.transpose(2, 0, 1)
+    #     f2 = f2.reshape(ntbin, np.newaxis, nchan, ngate)
+    #     std = f2.std(axis=0)
+    #     subint_table[1].data.field('DATA')[:] = (2**16*f2/std).astype(
+    #         np.int16)
+    #     fout = ('{0}folded3_{1}+{2:08}sec.fits'
+    #             .format(savepref, tstart.isot, dt.sec))
+    #     # Note: output_verify != 'ignore' resets the cards for some reason
+    #     try:
+    #         subint_table.writeto(fout, output_verify='ignore', clobber=True)
+    #     except ValueError:
+    #         print("FITS writings is a work in progress: "
+    #               "need to come to terms with array shapes")
+    #         print("f2.shape, subint_table[1].data.field('DATA')[:].shape = ",
+    #               f2.shape, subint_table[1].data.field('DATA')[:].shape)
 
 
 def CL_parser():
@@ -232,7 +239,7 @@ def CL_parser():
         '-nc', '--nchan', type=int, default=None,
         help="Number of channels in folded spectrum.")
     f_parser.add_argument(
-        '-ng', '--ngate', type=int, default=512,
+        '-ng', '--ngate', type=int, default=256,
         help="number of bins over the pulsar period.")
     f_parser.add_argument(
         '-nb', '--ntbin', type=int, default=5,
@@ -240,7 +247,7 @@ def CL_parser():
 
     w_parser = parser.add_argument_group("Waterfall related parameters")
     w_parser.add_argument(
-        '-w','--waterfall', type=bool, default=True,
+        '-w','--waterfall', type=bool, default=False,
         help="Produce a waterfall plot")
     w_parser.add_argument(
         '-nwm', '--ntw_min', type=int, default=10200,

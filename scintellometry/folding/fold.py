@@ -10,14 +10,14 @@ try:
     # do *NOT* use on-disk cache; blue gene doesn't work; slower anyway
     # import pyfftw
     # pyfftw.interfaces.cache.enable()
-    from pyfftw.interfaces.scipy_fftpack import (rfft, rfftfreq, irfft,
+    from pyfftw.interfaces.scipy_fftpack import (rfft, rfftfreq,
                                                  fft, ifft, fftfreq)
     _fftargs = {'threads': int(os.environ.get('OMP_NUM_THREADS', 2)),
                 'planner_effort': 'FFTW_ESTIMATE'}
 except(ImportError):
     print("Consider installing pyfftw: https://github.com/hgomersall/pyFFTW")
     # use FFT from scipy, since unlike numpy it does not cast up to complex128
-    from scipy.fftpack import rfft, rfftfreq, irfft, fft, ifft, fftfreq
+    from scipy.fftpack import rfft, rfftfreq, fft, ifft, fftfreq
     _fftargs = {}
 
 dispersion_delay_constant = 4149. * u.s * u.MHz**2 * u.cm**3 / u.pc
@@ -28,7 +28,7 @@ def fold(fh, comm, samplerate, fedge, fedge_at_top, nchan,
          dedisperse='incoherent',
          do_waterfall=True, do_foldspec=True, verbose=True,
          progress_interval=100, rfi_filter_raw=None, rfi_filter_power=None,
-         return_fits=True):
+         return_fits=False):
     """
     FFT data, fold by phase/time and make a waterfall series
 
@@ -39,7 +39,8 @@ def fold(fh, comm, samplerate, fedge, fedge_at_top, nchan,
     fh : file handle
         handle to file holding voltage timeseries
     comm: MPI communicator or None
-    samplerate : float
+        will use size, rank attributes
+    samplerate : Quantity
         rate at which samples were originally taken and thus double the
         band width (frequency units)
     fedge : float
@@ -75,43 +76,54 @@ def fold(fh, comm, samplerate, fedge, fedge_at_top, nchan,
         whether to give some progress information (default: True)
     progress_interval : int
         Ping every progress_interval sets
-    return_fits : bool (default: True)
+    return_fits : bool (default: False)
         return a subint fits table for rank == 0 (None otherwise)
 
     """
     assert dedisperse in (None, 'incoherent', 'by-channel', 'coherent')
+    assert nchan % fh.nchan == 0
+    if dedisperse == 'by-channel':
+        oversample = nchan // fh.nchan
+        assert ntint % oversample == 0
+    else:
+        oversample = 1
+
+    if dedisperse == 'coherent' and fh.nchan > 1:
+        raise ValueError("For coherent dedispersion, data must be "
+                         "unchannelized before folding.")
 
     if comm is None:
-        rank = 0
-        size = 1
+        mpi_rank = 0
+        mpi_size = 1
     else:
-        rank = comm.rank
-        size = comm.size
+        mpi_rank = comm.rank
+        mpi_size = comm.size
 
     # initialize folded spectrum and waterfall
+    # TODO: use estimated number of points to set dtype
     if do_foldspec:
-        foldspec = np.zeros((nchan, ngate, ntbin))
-        icount = np.zeros((nchan, ngate, ntbin), dtype=np.int64)
+        foldspec = np.zeros((ntbin, nchan, ngate), dtype=np.float32)
+        icount = np.zeros_like(foldspec, dtype=np.int32)
     else:
         foldspec = None
         icount = None
 
     if do_waterfall:
         nwsize = nt*ntint//ntw
-        waterfall = np.zeros((nchan, nwsize))
+        waterfall = np.zeros((nwsize, nchan))
     else:
         waterfall = None
 
-    if verbose and rank == 0:
+    if verbose and mpi_rank == 0:
         print('Reading from {}'.format(fh))
 
     nskip = fh.tell()/fh.blocksize
     if nskip > 0:
-        if verbose and rank == 0:
+        if verbose and mpi_rank == 0:
             print('Starting {0} blocks = {1} bytes out from start.'
                   .format(nskip, nskip*fh.blocksize))
 
-    dt1 = (1./fh.samplerate).to(u.s)
+    dt1 = (1./samplerate).to(u.s)
     # need 2*nchan real-valued samples for each FFT
     if fh.telescope == 'lofar':
         dtsample = fh.dtsample
@@ -119,73 +131,60 @@ def fold(fh, comm, samplerate, fedge, fedge_at_top, nchan,
         dtsample = nchan * 2 * dt1
     tstart = dtsample * ntint * nskip
 
-    # set up FFT functions: real vs complex fft's
-    if fh.nchan > 1:
-        thisfft = fft
-        thisifft = ifft
-        thisfftfreq = fftfreq
-    else:
-        thisfft = rfft
-        thisifft = irfft
-        thisfftfreq = rfftfreq
-
     # pre-calculate time delay due to dispersion in coarse channels
-    # LOFAR data is already channelized
-    if fh.nchan > 1:
-        freq = fh.frequencies
-    else:
-        if fedge_at_top:
-            freq = fedge - thisfftfreq(nchan*2, dt1.value) * u.Hz
-        else:
-            freq = fedge + thisfftfreq(nchan*2, dt1.value) * u.Hz
-        # sort lowest to highest freq
-        # freq.sort()
-        # [::2] sets frequency channels to numerical recipes ordering
-        # or, rfft has an unusual ordering
-        freq = freq[::2]
+    # for channelized data, frequencies are known
 
+    if fh.nchan == 1:
+        if fedge_at_top:
+            freq = fedge - rfftfreq(nchan*2, dt1.value)[::2] * u.Hz
+        else:
+            freq = fedge + rfftfreq(nchan*2, dt1.value)[::2] * u.Hz
+
+        freq_in = freq
+    else:
+        # input frequencies may not be the ones going out
+        freq_in = fh.frequencies
+        if oversample == 1:
+            freq = freq_in
+        else:
+            if fedge_at_top:
+                freq = (freq_in[:, np.newaxis] - u.Hz *
+                        fftfreq(oversample, dtsample.value))
+            else:
+                freq = (freq_in[:, np.newaxis] + u.Hz *
+                        fftfreq(oversample, dtsample.value))
+    ifreq = freq.ravel().argsort()
+
+    # pre-calculate time offsets in (input) channelized streams
     dt = (dispersion_delay_constant * dm *
-          (1./freq**2 - 1./fref**2)).to(u.s).value
+          (1./freq_in**2 - 1./fref**2)).to(u.s).value
 
     if dedisperse in ['coherent', 'by-channel']:
         # pre-calculate required turns due to dispersion
-        if fh.nchan > 1:
-            if fedge_at_top:
-                fcoh = (freq[np.newaxis,:] - u.Hz *
-                        thisfftfreq(ntint, dtsample.value)[:,np.newaxis])
-            else:
-                fcoh = (freq[np.newaxis,:] + u.Hz *
-                        thisfftfreq(ntint, dtsample.value)[:,np.newaxis])
+        if fedge_at_top:
+            fcoh = (freq_in[np.newaxis,:] - u.Hz *
+                    fftfreq(ntint, dtsample.value)[:, np.newaxis])
         else:
-            if fedge_at_top:
-                fcoh = fedge - thisfftfreq(nchan*2*ntint, dt1.value) * u.Hz
-            else:
-                fcoh = fedge + thisfftfreq(nchan*2*ntint, dt1.value) * u.Hz
+            fcoh = (freq_in[np.newaxis,:] + u.Hz *
+                    fftfreq(ntint, dtsample.value)[:, np.newaxis])
 
         # set frequency relative to which dispersion is coherently corrected
         if dedisperse == 'coherent':
             _fref = fref
         else:
-            _fref = freq[np.newaxis, :]
+            _fref = freq_in[np.newaxis, :]
         # (check via eq. 5.21 and following in
         # Lorimer & Kramer, Handbook of Pulsar Astrono
         dang = (dispersion_delay_constant * dm * fcoh *
-                (1./_fref-1./fcoh)**2) * 360. * u.deg
+                (1./_fref-1./fcoh)**2) * u.cycle
 
-        if thisfftfreq is rfftfreq:
-            # order of frequencies is r[0], r[1],i[1],...r[n-1],i[n-1],r[n]
-            # for 0 and n need only real part, but for 1...n-1 need real, imag
-            # so just get shifts for r[1], r[2], ..., r[n-1]
-            dang = dang.to(u.rad).value[1:-1:2]
-        else:
-            dang = dang.to(u.rad).value
+        with u.set_enabled_equivalencies(u.dimensionless_angles()):
+            dd_coh = np.exp(dang * 1j).conj().astype(np.complex64)
 
-        dd_coh = np.exp(dang * 1j).conj().astype(np.complex64)
-
-    for j in xrange(rank, nt, size):
+    for j in xrange(mpi_rank, nt, mpi_size):
         if verbose and j % progress_interval == 0:
             print('#{:4d}/{:4d} is doing {:6d}/{:6d}; time={:18.12f}'.format(
-                rank, size, j+1, nt,
+                mpi_rank, mpi_size, j+1, nt,
                 (tstart+dtsample*j*ntint).value))  # time since start
 
         # just in case numbers were set wrong -- break if file ends
@@ -201,8 +200,8 @@ def fold(fh, comm, samplerate, fedge, fedge_at_top, nchan,
             print("Hit {0!r}; writing pgm's".format(exc))
             break
         if verbose >= 2:
-            print("#{:4d}/{:4d} read {} items".format(rank, size, raw.size),
-                  end="")
+            print("#{:4d}/{:4d} read {} items"
+                  .format(mpi_rank, mpi_size, raw.size), end="")
 
         if rfi_filter_raw is not None:
             raw, ok = rfi_filter_raw(raw, nchan)
@@ -210,34 +209,52 @@ def fold(fh, comm, samplerate, fedge, fedge_at_top, nchan,
                 print("... raw RFI (zap {0}/{1})"
                       .format(np.count_nonzero(~ok), ok.size), end="")
 
-        if fh.telescope == 'aro':
+        if np.can_cast(raw.dtype, np.float32):
             vals = raw.astype(np.float32)
         else:
+            assert raw.dtype.kind == 'c'
             vals = raw
 
-        # TODO: for coherent dedispersion, need to undo existing channels
-        # for lofar and gmrt-phased
-        if dedisperse in ['coherent', 'by-channel']:
-            fine = thisfft(vals, axis=0, overwrite_x=True, **_fftargs)
-            if thisfft is rfft:
-                fine_cmplx = fine[1:-1].view(np.complex64)
-                fine_cmplx *= dd_coh  # overwrites parts of fine, as intended
-            else:
-                fine *= dd_coh
+        if fh.nchan == 1:
+            # have real-valued time stream; if we need some coherent
+            # dedispersion, do FT of whole thing, otherwise to output channels
+            ftchan = nchan if dedisperse == 'incoherent' else len(vals)//2
+            vals = rfft(vals.reshape(-1, ftchan*2), axis=-1,
+                        overwrite_x=True, **_fftargs)
+            # rfft: Re[0], Re[1], Im[1], ..., Re[n/2-1], Im[n/2-1], Re[n/2]
+            # re-order to normal fft format; make it like Numerical Recipes:
+            # Re[0], Re[n], Re[1], Im[1], .... (channel 0 is junk anyway)
+            vals = np.hstack((vals[:, 0], vals[:, -1],
+                              vals[:, 1:-1])).view(np.complex64)
+            # for incoherent, vals.shape=(ntint, nchan) -> OK
+            # for others, have           (1, ntint*nchan)
+            # reshape(nchan, ntint) gives rough as slowly varying -> .T
+            if dedisperse != 'incoherent':
+                fine = vals.reshape(nchan, -1).T
+                # now have fine.shape=(ntint, nchan)
 
-            vals = thisifft(fine, axis=0, overwrite_x=True, **_fftargs)
+        else:  # data already channelized
+            if dedisperse == 'by-channel':
+                fine = fft(vals, axis=0, overwrite_x=True, **_fftargs)
+                # have fine.shape=(ntint, fh.nchan)
+
+        if dedisperse in ['coherent', 'by-channel']:
+            fine *= dd_coh
+            # rechannelize to output channels
+            if oversample > 1 and dedisperse == 'by-channel':
+                # fine.shape=(ntint*oversample, chan_in)=(coarse,fine,fh.chan)
+                #  -> reshape(oversample, ntint, fh.nchan)
+                # want (ntint=fine, fh.nchan, oversample) -> .transpose
+                fine = (fine.reshape(oversample, -1, fh.nchan)
+                        .transpose(1, 2, 0)
+                        .reshape(-1, nchan))
+            # now, for both,     fine.shape=(ntint, nchan)
+            vals = ifft(fine, axis=0, overwrite_x=True, **_fftargs)
+            # vals[time, chan]
             if verbose >= 2:
                 print("... dedispersed", end="")
 
-        if fh.nchan == 1:
-            chan2 = thisfft(vals.reshape(-1, nchan*2), axis=-1,
-                            overwrite_x=True, **_fftargs)**2
-            # rfft: Re[0], Re[1], Im[1], ..., Re[n/2-1], Im[n/2-1], Re[n/2]
-            # re-order to Num.Rec. format: Re[0], Re[n/2], Re[1], ....
-            power = np.hstack((chan2[:,:1]+chan2[:,-1:],
-                               chan2[:,1:-1].reshape(-1,nchan-1,2).sum(-1)))
-        else:  # lofar and gmrt-phased are already channelised
-            power = vals.real**2 + vals.imag**2
+        power = vals.real**2 + vals.imag**2
 
         if verbose >= 2:
             print("... power", end="")
@@ -247,26 +264,27 @@ def fold(fh, comm, samplerate, fedge, fedge_at_top, nchan,
             print("... power RFI", end="")
 
         # current sample positions in stream
-        isr = j*ntint + np.arange(ntint)
+        isr = j*(ntint // oversample) + np.arange(ntint // oversample)
 
         if do_waterfall:
             # loop over corresponding positions in waterfall
             for iw in xrange(isr[0]//ntw, isr[-1]//ntw + 1):
                 if iw < nwsize:  # add sum of corresponding samples
-                    waterfall[:,iw] += np.sum(power[isr//ntw == iw],
-                                              axis=0)
+                    waterfall[iw, :] += np.sum(power[isr//ntw == iw],
+                                               axis=0)[ifreq]
             if verbose >= 2:
                 print("... waterfall", end="")
 
         if do_foldspec:
-            tsample = (tstart + isr*dtsample).value  # times since start
-            ibin = j*ntbin//nt  # bin in the time series: 0..ntbin-1
+            # times since start
+            tsample = (tstart + isr*dtsample*oversample).value
+            ibin = (j*ntbin) // nt  # bin in the time series: 0..ntbin-1
 
-            for k in xrange(nchan):
+            for k, kfreq in enumerate(ifreq):  # sort in frequency while at it
                 if dedisperse == 'coherent':
                     t = tsample  # already dedispersed
                 elif dedisperse in ['incoherent', 'by-channel']:
-                    t = tsample - dt[k]  # dedispersed times
+                    t = tsample - dt[kfreq // oversample]  # dedisperse
                 elif dedisperse is None:
                     t = tsample  # do nothing
 
@@ -274,9 +292,10 @@ def fold(fh, comm, samplerate, fedge, fedge_at_top, nchan,
                 iphase = np.remainder(phase*ngate,
                                       ngate).astype(np.int)
                 # sum and count samples by phase bin
-                foldspec[k, :, ibin] += np.bincount(iphase, power[:, k], ngate)
-                icount[k, :, ibin] += np.bincount(iphase, power[:, k] != 0.,
-                                                  ngate)
+                foldspec[ibin, k, :] += np.bincount(
+                    iphase, power[:, kfreq], ngate)
+                icount[ibin, k, :] += np.bincount(
+                    iphase, power[:, kfreq] != 0., ngate)
 
             if verbose >= 2:
                 print("... folded", end="")
@@ -284,89 +303,11 @@ def fold(fh, comm, samplerate, fedge, fedge_at_top, nchan,
         if verbose >= 2:
             print("... done")
 
-    if verbose >= 2 or verbose and rank == 0:
+    if verbose >= 2 or verbose and mpi_rank == 0:
         print('#{:4d}/{:4d} read {:6d} out of {:6d}'
-              .format(rank, size, j+1, nt))
+              .format(mpi_rank, mpi_size, j+1, nt))
 
-    if return_fits and rank == 0:
-        # subintu HDU
-        # update table columns
-        # TODO: allow multiple polarizations
-        npol = 1
-        newcols = []
-        # FITS table creation difficulties...
-        # assign data *after* 'new_table' creation
-        array2assign = {}
-        tsubint = ntint*dtsample
-        for col in fh['subint'].columns:
-            attrs = col.copy().__dict__
-            # remove non-init args
-            for nn in ['_pseudo_unsigned_ints', '_dims', '_physical_values',
-                       'dtype', '_phantom', 'array']:
-                attrs.pop(nn, None)
-
-            if col.name == 'TSUBINT':
-                array2assign[col.name] = np.array(tsubint)
-            elif col.name == 'OFFS_SUB':
-                array2assign[col.name] = np.arange(ntbin) * tsubint
-            elif col.name == 'DAT_FREQ':
-                # TODO: sort from lowest freq. to highest
-                # ('DATA') needs sorting as well
-                array2assign[col.name] = freq.to(u.MHz).value.astype(np.double)
-                attrs['format'] = '{0}D'.format(freq.size)
-            elif col.name == 'DAT_WTS':
-                array2assign[col.name] = np.ones(freq.size, dtype=np.float32)
-                attrs['format'] = '{0}E'.format(freq.size)
-            elif col.name == 'DAT_OFFS':
-                array2assign[col.name] = np.zeros(freq.size*npol,
-                                                  dtype=np.float32)
-                attrs['format'] = '{0}E'.format(freq.size*npol)
-            elif col.name == 'DAT_SCL':
-                array2assign[col.name] = np.ones(freq.size*npol,
-                                                 dtype=np.float32)
-                attrs['format'] = '{0}E'.format(freq.size)
-            elif col.name == 'DATA':
-                array2assign[col.name] = np.zeros((ntbin, npol, freq.size,
-                                                   ngate), dtype='i1')
-                attrs['dim'] = "({},{},{})".format(ngate, freq.size, npol)
-                attrs['format'] = "{0}I".format(ngate*freq.size*npol)
-            newcols.append(FITS.Column(**attrs))
-        newcoldefs = FITS.ColDefs(newcols)
-
-        oheader = fh['SUBINT'].header.copy()
-        newtable = FITS.new_table(newcoldefs, nrows=ntbin, header=oheader)
-        # update the 'subint' header and create a new one to be returned
-        # owing to the structure of the code (MPI), we need to assign
-        # the 'DATA' outside of fold.py
-        newtable.header.update('NPOL', 1)
-        newtable.header.update('NBIN', ngate)
-        newtable.header.update('NBIN_PRD', ngate)
-        newtable.header.update('NCHAN', freq.size)
-        newtable.header.update('INT_UNIT', 'PHS')
-        newtable.header.update('TBIN', tsubint.to(u.s).value)
-        chan_bw = np.abs(np.diff(freq.to(u.MHz).value).mean())
-        newtable.header.update('CHAN_BW', chan_bw)
-        if dedisperse in ['coherent', 'by-channel', 'incoherent']:
-            newtable.header.update('DM', dm.value)
-        # finally assign the table data
-        for name, array in array2assign.iteritems():
-            try:
-                newtable.data.field(name)[:] = array
-            except ValueError:
-                print("FITS error... work in progress",
-                      name, array.shape, newtable.data.field(name)[:].shape)
-
-        phdu = fh['PRIMARY'].copy()
-        subinttable = FITS.HDUList([phdu, newtable])
-        subinttable[1].header.update('EXTNAME', 'SUBINT')
-        subinttable['PRIMARY'].header.update('DATE-OBS', fh.time0.isot)
-        subinttable['PRIMARY'].header.update('STT_IMJD', int(fh.time0.mjd))
-        subinttable['PRIMARY'].header.update(
-            'STT_SMJD', int(str(fh.time0.mjd - int(fh.time0.mjd))[2:])*86400)
-    else:
-        subinttable = FITS.HDUList([])
-
-    return foldspec, icount, waterfall, subinttable
+    return foldspec, icount, waterfall
 
 
 class Folder(dict):
@@ -407,8 +348,7 @@ class Folder(dict):
             print("Missing 'fold' arguments: {}".format(missing))
 
     def __call__(self, fh, comm=None):
-        ifold, icount, water, subint = fold(fh, comm=comm, **self)
-        return ifold, icount, water, subint
+        return fold(fh, comm=comm, **self)
 
 
 def normalize_counts(q, count=None):
@@ -423,3 +363,81 @@ def normalize_counts(q, count=None):
                    np.sum(qn, 1, keepdims=True) /
                    np.sum(nonzero, 1, keepdims=True), 0.)
     return qn
+
+# if return_fits and mpi_rank == 0:
+#     # subintu HDU
+#     # update table columns
+#     # TODO: allow multiple polarizations
+#     npol = 1
+#     newcols = []
+#     # FITS table creation difficulties...
+#     # assign data *after* 'new_table' creation
+#     array2assign = {}
+#     tsubint = ntint*dtsample
+#     for col in fh['subint'].columns:
+#         attrs = col.copy().__dict__
+#         # remove non-init args
+#         for nn in ['_pseudo_unsigned_ints', '_dims', '_physical_values',
+#                    'dtype', '_phantom', 'array']:
+#             attrs.pop(nn, None)
+
+#         if col.name == 'TSUBINT':
+#             array2assign[col.name] = np.array(tsubint)
+#         elif col.name == 'OFFS_SUB':
+#             array2assign[col.name] = np.arange(ntbin) * tsubint
+#         elif col.name == 'DAT_FREQ':
+#             # TODO: sort from lowest freq. to highest
+#             # ('DATA') needs sorting as well
+#             array2assign[col.name] = freq.to(u.MHz).value.astype(np.double)
+#             attrs['format'] = '{0}D'.format(freq.size)
+#         elif col.name == 'DAT_WTS':
+#             array2assign[col.name] = np.ones(freq.size, dtype=np.float32)
+#             attrs['format'] = '{0}E'.format(freq.size)
+#         elif col.name == 'DAT_OFFS':
+#             array2assign[col.name] = np.zeros(freq.size*npol,
+#                                               dtype=np.float32)
+#             attrs['format'] = '{0}E'.format(freq.size*npol)
+#         elif col.name == 'DAT_SCL':
+#             array2assign[col.name] = np.ones(freq.size*npol,
+#                                              dtype=np.float32)
+#             attrs['format'] = '{0}E'.format(freq.size)
+#         elif col.name == 'DATA':
+#             array2assign[col.name] = np.zeros((ntbin, npol, freq.size,
+#                                                ngate), dtype='i1')
+#             attrs['dim'] = "({},{},{})".format(ngate, freq.size, npol)
+#             attrs['format'] = "{0}I".format(ngate*freq.size*npol)
+#         newcols.append(FITS.Column(**attrs))
+#     newcoldefs = FITS.ColDefs(newcols)
+
+#     oheader = fh['SUBINT'].header.copy()
+#     newtable = FITS.new_table(newcoldefs, nrows=ntbin, header=oheader)
+#     # update the 'subint' header and create a new one to be returned
+#     # owing to the structure of the code (MPI), we need to assign
+#     # the 'DATA' outside of fold.py
+#     newtable.header.update('NPOL', 1)
+#     newtable.header.update('NBIN', ngate)
+#     newtable.header.update('NBIN_PRD', ngate)
+#     newtable.header.update('NCHAN', freq.size)
+#     newtable.header.update('INT_UNIT', 'PHS')
+#     newtable.header.update('TBIN', tsubint.to(u.s).value)
+#     chan_bw = np.abs(np.diff(freq.to(u.MHz).value).mean())
+#     newtable.header.update('CHAN_BW', chan_bw)
+#     if dedisperse in ['coherent', 'by-channel', 'incoherent']:
+#         newtable.header.update('DM', dm.value)
+#     # finally assign the table data
+#     for name, array in array2assign.iteritems():
+#         try:
+#             newtable.data.field(name)[:] = array
+#         except ValueError:
+#             print("FITS error... work in progress",
+#                   name, array.shape, newtable.data.field(name)[:].shape)
+
+#     phdu = fh['PRIMARY'].copy()
+#     subinttable = FITS.HDUList([phdu, newtable])
+#     subinttable[1].header.update('EXTNAME', 'SUBINT')
+#     subinttable['PRIMARY'].header.update('DATE-OBS', fh.time0.isot)
+#     subinttable['PRIMARY'].header.update('STT_IMJD', int(fh.time0.mjd))
+#     subinttable['PRIMARY'].header.update(
+#         'STT_SMJD', int(str(fh.time0.mjd - int(fh.time0.mjd))[2:])*86400)
+
+# return subinttable

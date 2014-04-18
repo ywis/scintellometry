@@ -38,8 +38,6 @@ if __name__ == '__main__':
         args.telescope = 'lofar'
         # already channelized, determined from filehandle
         # (previously args.nchan = 20)
-        args.nchan = None
-        args.ngate = 512
         args.ntw_min = 1020
         args.waterfall = False
         args.verbose += 1

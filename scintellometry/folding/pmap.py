@@ -4,7 +4,7 @@ from __future__ import division, print_function
 import numpy as np
 
 
-def pmap(fn, data, iscale, verbose=False):
+def pmap(fn, data, iscale=0, rmin=None, rmax=None, verbose=False):
     """Construct grayscale .pmg from a 2-dimensional array.
 
     Parameters
@@ -24,7 +24,10 @@ def pmap(fn, data, iscale, verbose=False):
     while iscale1 > 0:
         rmap = np.sqrt(np.abs(rmap))*np.sign(rmap)
         iscale1 -= 1
-    rmin, rmax = rmap.min(), rmap.max()
+    if rmin is None:
+        rmin = rmap.min()
+    if rmax is None:
+        rmax = rmap.max()
     if verbose:
         print('Contructing {0}; min,max={1},{2}'.format(fn, rmin, rmax))
 
