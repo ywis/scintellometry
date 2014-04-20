@@ -171,7 +171,7 @@ class MultiFile(psrFITS):
             return offset
 
         if isinstance(unit, str) and unit == 'time':
-            return self.time()
+            return self.time(offset)
 
         return (offset * u.byte).to(
             unit, equivalencies=[(u.Unit(self.recordsize * u.byte),
