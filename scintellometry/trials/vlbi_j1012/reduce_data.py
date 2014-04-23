@@ -55,7 +55,7 @@ if __name__ == '__main__':
         args.waterfall = False
         args.verbose += 1
     reduce(
-        args.telescope, args.date, tstart=args.starttime, tend=args.endtime,
+        args.telescope, args.date, tstart=args.tstart, tend=args.tend,
         nchan=args.nchan, ngate=args.ngate, ntbin=args.ntbin,
         ntw_min=args.ntw_min, rfi_filter_raw=args.rfi_filter_raw,
         do_waterfall=args.waterfall, do_foldspec=args.foldspec,

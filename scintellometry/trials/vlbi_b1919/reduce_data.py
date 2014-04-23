@@ -38,13 +38,9 @@ if __name__ == '__main__':
         args.telescope = 'lofar'
         # already channelized, determined from filehandle
         # (previously args.nchan = 20)
-        args.nchan = None
-        args.ngate = 512
-        args.ntbin = 5
         args.ntw_min = 1020
-        args.waterfall = True
+        args.waterfall = False
         args.verbose += 1
-        args.dedisperse = 'incoherent'
         args.rfi_filter_raw = None
 
     elif args.reduction_defaults == 'aro':
@@ -64,7 +60,7 @@ if __name__ == '__main__':
         args.rfi_filter_raw = None
         args.verbose += 1
     reduce(
-        args.telescope, args.date, tstart=args.starttime, tend=args.endtime,
+        args.telescope, args.date, tstart=args.tstart, tend=args.tend,
         nchan=args.nchan, ngate=args.ngate, ntbin=args.ntbin,
         ntw_min=args.ntw_min, rfi_filter_raw=args.rfi_filter_raw,
         do_waterfall=args.waterfall, do_foldspec=args.foldspec,

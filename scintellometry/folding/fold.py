@@ -359,9 +359,10 @@ def normalize_counts(q, count=None):
     else:
         nonzero = count > 0
         qn = np.where(nonzero, q/count, 0.)
+    # subtract mean profile (pulsar phase always last dimension)
     qn -= np.where(nonzero,
-                   np.sum(qn, 1, keepdims=True) /
-                   np.sum(nonzero, 1, keepdims=True), 0.)
+                   np.sum(qn, -1, keepdims=True) /
+                   np.sum(nonzero, -1, keepdims=True), 0.)
     return qn
 
 # if return_fits and mpi_rank == 0:

@@ -18,10 +18,16 @@ def reduce(telescope, obskey, tstart, tend, nchan, ngate, ntbin, ntw_min,
            rfi_filter_raw=None, fref=None, dedisperse=None,
            do_waterfall=True, do_foldspec=True, verbose=True):
 
+    comm = MPI.COMM_WORLD
+
+    if verbose > 3 and comm.rank == 0:
+        print(telescope, obskey, tstart, tend, nchan, ngate, ntbin, ntw_min,
+              rfi_filter_raw, fref, dedisperse,
+              do_waterfall, do_foldspec, verbose)
+
     if dedisperse is not None and fref is None:
         raise ValueError("Need to give reference frequency to dedisperse to")
 
-    comm = MPI.COMM_WORLD
     Obs = obsdata()
     # find nearest observation to 'date',
     # warning if > 1s off requested start time of observation
@@ -69,6 +75,9 @@ def reduce(telescope, obskey, tstart, tend, nchan, ngate, ntbin, ntw_min,
 
         time0 = fh.time0
         tstart = time0 if tstart is None else Time(tstart, scale='utc')
+        if tend is None:
+            tend = Obs[telescope][obskey]['tend']
+
         try:
             tend = Time(tend, scale='utc')
             dt = tend - tstart
@@ -219,12 +228,11 @@ def CL_parser():
         help="The date or other identifier of the data to reduce. "
         "The key with which the observation is stored in observations.conf.")
     d_parser.add_argument(
-        '-t0', '--starttime', type=str, default=None,
+        '-t0', '--tstart', type=str, default=None,
         help="Timestamp within the observation run to start processing."
         "Default is start of the observation")
     d_parser.add_argument(
-        '-t1', '--endtime', '-dt', '--duration', type=str,
-        default=300,
+        '-t1', '--tend', '-dt', '--duration', type=str, default=None,
         help="Timestamp within the observation run to end processing or "
         "duration (in seconds) of the section to process.")
     d_parser.add_argument(
