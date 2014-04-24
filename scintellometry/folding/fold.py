@@ -99,18 +99,23 @@ def fold(fh, comm, samplerate, fedge, fedge_at_top, nchan,
         mpi_rank = comm.rank
         mpi_size = comm.size
 
+    npol = getattr(fh, 'npol', 1)
+    assert npol == 1 or npol == 2
+    if verbose > 1 and mpi_rank == 0:
+        print("Number of polarisations={}".format(npol))
+
     # initialize folded spectrum and waterfall
     # TODO: use estimated number of points to set dtype
     if do_foldspec:
-        foldspec = np.zeros((ntbin, nchan, ngate), dtype=np.float32)
-        icount = np.zeros_like(foldspec, dtype=np.int32)
+        foldspec = np.zeros((ntbin, nchan, ngate, npol**2), dtype=np.float32)
+        icount = np.zeros((ntbin, nchan, ngate), dtype=np.int32)
     else:
         foldspec = None
         icount = None
 
     if do_waterfall:
         nwsize = nt*ntint//ntw
-        waterfall = np.zeros((nwsize, nchan))
+        waterfall = np.zeros((nwsize, nchan, npol**2), dtype=np.float64)
     else:
         waterfall = None
 
@@ -181,6 +186,9 @@ def fold(fh, comm, samplerate, fedge, fedge_at_top, nchan,
         with u.set_enabled_equivalencies(u.dimensionless_angles()):
             dd_coh = np.exp(dang * 1j).conj().astype(np.complex64)
 
+        # add dimension for polarisation
+        dd_coh = dd_coh[..., np.newaxis]
+
     for j in xrange(mpi_rank, nt, mpi_size):
         if verbose and j % progress_interval == 0:
             print('#{:4d}/{:4d} is doing {:6d}/{:6d}; time={:18.12f}'.format(
@@ -203,8 +211,16 @@ def fold(fh, comm, samplerate, fedge, fedge_at_top, nchan,
             print("#{:4d}/{:4d} read {} items"
                   .format(mpi_rank, mpi_size, raw.size), end="")
 
+        if npol == 2:  # multiple polarisations
+            raw = raw.view(raw.dtype.fields.values()[0][0])
+
+        if fh.nchan == 1:  # raw.shape=(ntint*npol)
+            raw = raw.reshape(-1, npol)
+        else:              # raw.shape=(ntint, nchan*npol)
+            raw = raw.reshape(-1, fh.nchan, npol)
+
         if rfi_filter_raw is not None:
-            raw, ok = rfi_filter_raw(raw, nchan)
+            raw, ok = rfi_filter_raw(raw)
             if verbose >= 2:
                 print("... raw RFI (zap {0}/{1})"
                       .format(np.count_nonzero(~ok), ok.size), end="")
@@ -219,42 +235,52 @@ def fold(fh, comm, samplerate, fedge, fedge_at_top, nchan,
             # have real-valued time stream; if we need some coherent
             # dedispersion, do FT of whole thing, otherwise to output channels
             ftchan = nchan if dedisperse == 'incoherent' else len(vals)//2
-            vals = rfft(vals.reshape(-1, ftchan*2), axis=-1,
+            vals = rfft(vals.reshape(-1, ftchan*2, npol), axis=1,
                         overwrite_x=True, **_fftargs)
             # rfft: Re[0], Re[1], Im[1], ..., Re[n/2-1], Im[n/2-1], Re[n/2]
             # re-order to normal fft format; make it like Numerical Recipes:
             # Re[0], Re[n], Re[1], Im[1], .... (channel 0 is junk anyway)
             vals = np.hstack((vals[:, 0], vals[:, -1],
                               vals[:, 1:-1])).view(np.complex64)
-            # for incoherent, vals.shape=(ntint, nchan) -> OK
-            # for others, have           (1, ntint*nchan)
+            # for incoherent, vals.shape=(ntint, nchan, npol) -> OK
+            # for others, have           (1, ntint*nchan, npol)
             # reshape(nchan, ntint) gives rough as slowly varying -> .T
             if dedisperse != 'incoherent':
-                fine = vals.reshape(nchan, -1).T
-                # now have fine.shape=(ntint, nchan)
+                fine = vals.reshape(nchan, -1, npol).transpose(1, 0, 2)
+                # now have fine.shape=(ntint, nchan, npol)
 
         else:  # data already channelized
             if dedisperse == 'by-channel':
                 fine = fft(vals, axis=0, overwrite_x=True, **_fftargs)
-                # have fine.shape=(ntint, fh.nchan)
+                # have fine.shape=(ntint, fh.nchan, npol)
 
         if dedisperse in ['coherent', 'by-channel']:
             fine *= dd_coh
             # rechannelize to output channels
             if oversample > 1 and dedisperse == 'by-channel':
-                # fine.shape=(ntint*oversample, chan_in)=(coarse,fine,fh.chan)
-                #  -> reshape(oversample, ntint, fh.nchan)
-                # want (ntint=fine, fh.nchan, oversample) -> .transpose
-                fine = (fine.reshape(oversample, -1, fh.nchan)
-                        .transpose(1, 2, 0)
-                        .reshape(-1, nchan))
-            # now, for both,     fine.shape=(ntint, nchan)
+                # fine.shape=(ntint*oversample, chan_in, npol)
+                #           =(coarse,fine,fh.chan, npol)
+                #  -> reshape(oversample, ntint, fh.nchan, npol)
+                # want (ntint=fine, fh.nchan, oversample, npol) -> .transpose
+                fine = (fine.reshape(oversample, -1, fh.nchan, npol)
+                        .transpose(1, 2, 0, 3)
+                        .reshape(-1, nchan, npol))
+            # now, for both,     fine.shape=(ntint, nchan, npol)
             vals = ifft(fine, axis=0, overwrite_x=True, **_fftargs)
-            # vals[time, chan]
+            # vals[time, chan, pol]
             if verbose >= 2:
                 print("... dedispersed", end="")
 
-        power = vals.real**2 + vals.imag**2
+        if npol == 1:
+            power = vals.real**2 + vals.imag**2
+        else:
+            p0 = vals[..., 0]
+            p1 = vals[..., 1]
+            power = np.empty(vals.shape[:-1] + (4,), np.float32)
+            power[..., 0] = p0.real**2 + p0.imag**2
+            power[..., 1] = p0.real*p1.real + p0.imag*p1.imag
+            power[..., 2] = p0.imag*p1.real - p0.real*p1.imag
+            power[..., 3] = p1.real**2 + p1.imag**2
 
         if verbose >= 2:
             print("... power", end="")
@@ -292,10 +318,11 @@ def fold(fh, comm, samplerate, fedge, fedge_at_top, nchan,
                 iphase = np.remainder(phase*ngate,
                                       ngate).astype(np.int)
                 # sum and count samples by phase bin
-                foldspec[ibin, k, :] += np.bincount(
-                    iphase, power[:, kfreq], ngate)
+                for ipow in xrange(npol**2):
+                    foldspec[ibin, k, :, ipow] += np.bincount(
+                        iphase, power[:, kfreq, ipow], ngate)
                 icount[ibin, k, :] += np.bincount(
-                    iphase, power[:, kfreq] != 0., ngate)
+                    iphase, power[:, kfreq, 0] != 0., ngate)
 
             if verbose >= 2:
                 print("... folded", end="")
@@ -306,6 +333,12 @@ def fold(fh, comm, samplerate, fedge, fedge_at_top, nchan,
     if verbose >= 2 or verbose and mpi_rank == 0:
         print('#{:4d}/{:4d} read {:6d} out of {:6d}'
               .format(mpi_rank, mpi_size, j+1, nt))
+
+    if npol == 1:
+        if do_foldspec:
+            foldspec = foldspec.reshape(foldspec.shape[:-1])
+        if do_waterfall:
+            waterfall = waterfall.reshape(waterfall.shape[:-1])
 
     return foldspec, icount, waterfall
 

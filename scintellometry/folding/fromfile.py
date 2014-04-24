@@ -7,7 +7,8 @@ shift76543210 = np.array([7,6,5,4,3,2,1,0], np.int8)
 msblsb_bits = np.array([-16, 15], np.int8)
 twopiby256 = 2.*np.pi / 256.
 
-NP_DTYPES = {'1bit': 'i1', '4bit': 'i1', 'nibble': 'i1', 'ci1': '2i1'}
+NP_DTYPES = {'1bit': 'i1', '4bit': 'i1', 'nibble': 'i1',
+             'ci1': '2i1', 'ci1,ci1': '2i1,2i1'}
 
 
 def fromfile(file, dtype, count, verbose=False):
@@ -45,8 +46,8 @@ def fromfile(file, dtype, count, verbose=False):
 
     if np_dtype is dtype:
         return raw
-    elif dtype == 'ci1':
-        return raw.astype(np.float32).view(np.complex64).squeeze()
+    elif dtype.startswith('ci1'):
+        return raw.astype('f4').view(dtype.replace('ci1', 'c8')).squeeze()
     elif dtype == '1bit':
         # For a given int8 byte containing bits 76543210
         # left_shift(byte[:,np.newaxis], shift76543210):

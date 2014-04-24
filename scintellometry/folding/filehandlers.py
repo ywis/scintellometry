@@ -21,7 +21,7 @@ from psrfits_tools import psrFITS
 
 # size in bytes of records read from file (simple for ARO: 1 byte/sample)
 def dtype_itemsize(dtype):
-    bps = {'ci1': 2, '4bit': 0.5}.get(dtype, None)
+    bps = {'ci1': 2, '(2,)ci1': 4, '4bit': 0.5}.get(dtype, None)
     if bps is None:
         bps = np.dtype(dtype).itemsize
     return bps
@@ -53,7 +53,7 @@ class MultiFile(psrFITS):
         self.itemsize = dtype_itemsize(self.dtype)
         self.recordsize = self.itemsize * self.nchan
         assert self.blocksize % self.recordsize == 0
-        self.setsize = int(self.blocksize / self.recordsize)
+        self.setsize = self.blocksize // self.recordsize
 
         super(MultiFile, self).__init__(hdus=['SUBINT'])
         self.set_hdu_defaults(header_defaults[self.telescope])
@@ -352,84 +352,102 @@ class LOFARdata(MultiFile):
             to be in the same directory.
         comm : MPI communicator
         blocksize : int or None
-            Preferred number of bytes *per channel* that are read in one go.
-            Default: 2**20, making ~20MB for 20 channels
+            Preferred number of bytes *per channel* and *per file* that are
+            read in one go.
+            Default: 2**20, or *20*2*npol=40|80 MB, or 2**18 samples (float)
         refloat : Bool
             Whether to convert compressed lofar data (stored as int1) back
             to float using the associated scale factors.  If False, simply
             use the integer data, ignoring the scale factors.  Default: True
 
         """
-        # read the HDF5 file and get useful data
-        h0 = HDF5File(raw_files[0].replace('.raw', '.h5'), 'r')
-        saps = sorted([i for i in h0.keys() if 'SUB_ARRAY_POINTING' in i])
-        s0 = h0[saps[0]]
-        # string headers have problems on BGQ
-        try:
-            time0 = Time(s0.attrs['EXPTIME_START_UTC'].replace('Z',''),
-                         scale='utc')
-        except KeyError:
-            time0 = Time(s0.attrs['EXPTIME_START_MJD'], format='mjd',
-                         scale='utc', precision=3)
-            # should start on whole minute
-            assert time0.isot.endswith('00.000')
-            # ensure we have the time to double-float rounding precision
-            time0 = Time(time0.isot, scale='utc')
+        self.nfh = len(raw_files)
+        # sanity check: one or two polarisations
+        assert self.nfh == 2 or self.nfh == 4
+        self.npol = self.nfh // 2
+        # read the HDF5 files and get useful data
+        lofar_dtype = None
+        for ifile, raw_file in enumerate(raw_files):
+            try:
+                h5 = HDF5File(raw_file.replace('.raw', '.h5'), 'r')
+            except IOError:  # no h5 file, treat as all zeros
+                raw_files[ifile] = '/dev/zero'
+                continue
 
-        beams = sorted([i for i in s0.keys() if 'BEAM' in i])
-        b0 = s0[beams[0]]
-        frequencies = (b0['COORDINATES']['COORDINATE_1']
-                       .attrs['AXIS_VALUES_WORLD'] * u.Hz).to(u.MHz)
-        fbottom = frequencies[0]
-        nchan = len(frequencies)  # = st0.attrs['NOF_SUBBANDS']
-        blocksize *= nchan
-        # can also get from np.diff(frequencies.diff).mean()
-        try:
-            fwidth = u.Quantity(b0.attrs['SUBBAND_WIDTH'],
-                                b0.attrs['CHANNEL_WIDTH_UNIT']).to(u.MHz)
+            # get attributes
+            saps = sorted([i for i in h5.keys() if 'SUB_ARRAY_POINTING' in i])
+            s0 = h5[saps[0]]
+            beams = sorted([i for i in s0.keys() if 'BEAM' in i])
+            b0 = s0[beams[0]]
+            stokes = sorted([i for i in b0.keys()
+                             if 'STOKES' in i and 'i2f' not in i])
+            st0 = b0[stokes[0]]
+            if lofar_dtype is None:  # only do this once; files should be same
+                try:
+                    lofar_dtype = st0.attrs['DATATYPE']
+                    string_key_ok = True
+                except KeyError:  # BGQ doesn't like strings in attributes
+                    string_key_ok = False
+                    lofar_dtype = ('int8' if any('i2f' in i for i in b0.keys())
+                                   else 'float')
 
-            samplerate = u.Quantity(b0.attrs['SAMPLING_RATE'],
-                                    b0.attrs['SAMPLING_RATE_UNIT']).to(u.MHz)
-        except KeyError:  # BGQ; assume it is Hz
-            fwidth = u.Quantity(b0.attrs['SUBBAND_WIDTH'] * u.Hz).to(u.MHz)
+                if lofar_dtype == 'int8' and refloat:
+                    # uncompress to float on-the-fly; ensure we look like
+                    # two float per polarisation = complex
+                    dtype = 'c8'  # no ">c8" since we produce these ourselves
+                    # define lists to be filled below
+                    self.compressed_block_size = [None]*len(raw_files)
+                    self.scales = [None]*len(raw_files)
+                else:
+                    dtype = _lofar_dtypes[lofar_dtype]
+                    # signal that no scaling is needed
+                    self.scales = False
 
-            samplerate = u.Quantity(b0.attrs['SAMPLING_RATE'] * u.Hz).to(u.MHz)
+                if self.npol == 2:  # two polarisations -> two complex numbers
+                    dtype = dtype + ',' + dtype
 
-        stokes = sorted([i for i in b0.keys()
-                         if 'STOKES' in i and 'i2f' not in i])
-        st0 = b0[stokes[0]]
-        try:
-            dtype = _lofar_dtypes[st0.attrs['DATATYPE']]
-        except KeyError:
-            dtype = _lofar_dtypes['int8' if any('i2f' in i for i in b0.keys())
-                                  else 'float']
+            if lofar_dtype == 'int8' and refloat:
+                # size over which scaling was derived; this is *per file*
+                diginfo = b0['{0}_i2f'.format(stokes[0])]
+                self.compressed_block_size[ifile] = diginfo.attrs[
+                    '{0}_recsize'.format(stokes[0])]
+                # associated scales
+                self.scales[ifile] = np.array(b0['{0}_i2f'.format(stokes[0])])
 
-        if dtype == 'ci1' and refloat:  # compressed LOFAR file
-            # convert to float on-the-fly; ensure we look like float file
-            dtype = 'c8'
-            diginfo = b0['{0}_i2f'.format(stokes[0])]
-            self.scales = np.array(diginfo)
-            # size over which scaling was derived; this is *per file*
-            self.compressed_block_size = diginfo.attrs['{0}_recsize'
-                                                       .format(stokes[0])]
-        else:
-            self.scales = None
+            if hasattr(self, 'frequencies'):  # no need to do more than once
+                continue
 
-        h0.close()
+            self.frequencies = (b0['COORDINATES']['COORDINATE_1']
+                                .attrs['AXIS_VALUES_WORLD'] * u.Hz).to(u.MHz)
+            fwidth = b0.attrs['SUBBAND_WIDTH']
+            samplerate = b0.attrs['SAMPLING_RATE']
+            if string_key_ok:
+                self.time0 = Time(s0.attrs['EXPTIME_START_UTC']
+                                  .replace('Z',''), scale='utc')
+                self.fwidth = u.Quantity(
+                    fwidth, b0.attrs['CHANNEL_WIDTH_UNIT']).to(u.MHz)
+                self.samplerate = u.Quantity(
+                    samplerate, b0.attrs['SAMPLING_RATE_UNIT']).to(u.MHz)
+            else:
+                time0 = Time(s0.attrs['EXPTIME_START_MJD'], format='mjd',
+                             scale='utc', precision=3)
+                # should start on whole minute
+                assert time0.isot.endswith('00.000')
+                # ensure we have the time to double-float rounding precision
+                self.time0 = Time(time0.isot, scale='utc')
+                self.fwidth = (fwidth * u.Hz).to(u.MHz)
+                self.samplerate = (samplerate * u.Hz).to(u.MHz)
 
-        self.time0 = time0
-        self.samplerate = samplerate
-        self.fwidth = fwidth
-        self.frequencies = frequencies
-        self.fedge = fbottom
+        self.fedge = self.frequencies[0]
         self.fedge_at_top = False
         self.dtsample = (1./self.fwidth).to(u.s)
 
-        super(LOFARdata, self).__init__(raw_files, blocksize, dtype, nchan,
-                                        comm=comm)
+        nchan = len(self.frequencies)  # = st0.attrs['NOF_SUBBANDS']
+        super(LOFARdata, self).__init__(raw_files, blocksize*nchan,
+                                        dtype, nchan, comm=comm)
         # update some of the hdu data
         self['PRIMARY'].header['DATE-OBS'] = self.time0.isot
-        self[0].header.update('TBIN', (1./samplerate).to('s').value)
+        self[0].header.update('TBIN', (1./self.samplerate).to('s').value)
 
     def ntint(self, nchan):
         """
@@ -449,52 +467,61 @@ class LOFARdata(MultiFile):
         For compressed (int8) lofar data, the data are decompressed if
         self.scale has been set (see refloat in initializer).
         """
-        if self.scales is None:
-            z = np.empty(size, dtype='i1').reshape(2, -1, self.itemsize // 2)
+        if not self.scales:
+            z = np.empty(size, dtype='i1').reshape(self.nfh, -1,
+                                                   self.itemsize // self.nfh)
             for fh, buf in zip(self.fh_raw, z):
                 fh.Iread([buf, MPI.BYTE])
         else:  # rescaling compressed integer data
             # offset and size in the compressed file
             read_offset = self.offset // self.itemsize
             read_size = size // self.itemsize
-            # create float output array (real, imag)
-            z = np.empty(read_size * 2, dtype='f4').reshape(2, -1, self.nchan)
+            # create float output array (real, imag), possibly times two
+            z = np.empty(read_size * self.nfh, dtype='f4').reshape(
+                self.nfh, -1, self.nchan)
             # and a buffer to receive the compressed data
             buf = np.empty(read_size, dtype='i1').reshape(-1, self.nchan)
-            for i, fh in enumerate(self.fh_raw):
+            for ifh, fh in enumerate(self.fh_raw):
+                if self.scales[ifh] is None:  # non-existing file
+                    z[ifh] = 0.
+                    continue
+
                 fh.Iread([buf, MPI.BYTE])
                 # multiply with the scale appropriate for each part of the
                 # buffer (for smaller reads, this will be a single value)
-                for iscale in range(read_offset // self.compressed_block_size,
+                for iscale in range(read_offset //
+                                    self.compressed_block_size[ifh],
                                     (read_offset + read_size) //
-                                    self.compressed_block_size + 1):
+                                    self.compressed_block_size[ifh] + 1):
                     # find range for which scale was determined
-                    i0 = iscale * self.compressed_block_size
-                    i1 = (iscale + 1) * self.compressed_block_size
+                    i0 = iscale * self.compressed_block_size[ifh]
+                    i1 = (iscale + 1) * self.compressed_block_size[ifh]
                     # get part that overlaps with the buffer
                     i0 = max(0, (i0 - read_offset) // self.nchan)
                     i1 = min(buf.shape[0], (i1 - read_offset) // self.nchan)
                     # apply scales
-                    z[i, i0:i1] = buf[i0:i1] * self.scales[iscale, :]
-            z = z.reshape(2, -1, 1)
+                    z[ifh, i0:i1] = buf[i0:i1] * self.scales[ifh][iscale, :]
+            z = z.reshape(self.nfh, -1, 1)
 
         self.offset += size
+        # return what can be interpreted as a byte stream
         return z.transpose(1, 0, 2).ravel()
 
     def _seek(self, offset):
         """Offset by the given number of bytes"""
         if offset % self.recordsize != 0:
             raise ValueError("Cannot offset to non-integer number of records")
-        # half the total number of corresponding bytes in each file
+        # can have two or four combined files, i.e., divide by that number
+        # to get the total number of corresponding bytes in each file
         # if compressed from float32 to int8: correct for additional factor 4.
         if self.scales is None:
-            assert offset % 2 == 0
+            assert offset % self.nfh == 0
             for fh in self.fh_raw:
-                fh.Seek(offset // 2)
+                fh.Seek(offset // self.nfh)
         else:
-            assert offset % 8 == 0
+            assert offset % (self.nfh * 4) == 0
             for fh in self.fh_raw:
-                fh.Seek(offset // 8)
+                fh.Seek(offset // self.nfh // 4)
         self.offset = offset
 
     def __repr__(self):
@@ -527,12 +554,14 @@ class LOFARdata_Pcombined(MultiFile):
 
     def open(self, raw_files_list):
         self.fh_raw = [LOFARdata(raw_files, comm=self.comm,
-                                 blocksize=getattr(self, 'per_channel_blocksize', 2**18))
+                                 blocksize=getattr(self,
+                                                   'per_channel_blocksize',
+                                                   2**18))
                        for raw_files in raw_files_list]
         self.fh_links = []
         # make sure basic properties of the files are the same
         for prop in ['dtype', 'itemsize', 'time0', 'samplerate',
-                     'fwidth', 'dtsample']:
+                     'fwidth', 'dtsample', 'npol']:
             props = [fh.__dict__[prop] for fh in self.fh_raw]
             if prop == 'time0':
                 props = [p.isot for p in props]
@@ -590,7 +619,7 @@ class LOFARdata_Pcombined(MultiFile):
         return raw
 
     def __repr__(self):
-        return ("<open (concatenated) lofar polarization pair from {} to {}>"
+        return ("<open (concatenated) lofar sets from {} to {}>"
                 .format(self.fh_raw[0].fh_raw[0], self.fh_raw[-1].fh_raw[-1]))
 
 # LOFAR defaults for psrfits HDUs

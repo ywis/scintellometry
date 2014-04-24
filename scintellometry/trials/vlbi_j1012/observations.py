@@ -82,12 +82,12 @@ class telescope(dict):
         raw_files = [self['raw_filestmplt'].format(fnbase, disk_no[i],
                                                    node, dt, i)
                      for i in range(3)]
-        return [seq_file, raw_files]
+        return (seq_file, raw_files)
 
     def _lofar_file(self, key):
         """
         return a list of 2-tuples for LOFAR observations 'key'.
-        Each tuple is the S-pair of files, and the list is over the
+        Each tuple is the S-set of files, and the list is over the
         P channels
 
         """
@@ -98,11 +98,12 @@ class telescope(dict):
         S = obs.get('S', self.get('S', None))
         P = obs.get('P', self.get('P', None))
         files = []
-        for p in range(P[0], P[1]):
-            file1 = file_fmt.format(fnbase, floc, S=S[0], P=p)
-            file2 = file_fmt.format(fnbase, floc, S=S[1], P=p)
-            files.append((file1, file2))
-        return [files]
+        for p in P:
+            subset = []
+            for s in S:
+                subset.append(file_fmt.format(fnbase, floc, S=s, P=p))
+            files.append(subset)
+        return (files,)  # protect from the *files done in GenericOpen
 
     def _gmrt_twofiles(self, key):
         """"
@@ -116,7 +117,7 @@ class telescope(dict):
         file1 = file_fmt.format(fnbase, pol, 1)
         file2 = file_fmt.format(fnbase, pol, 2)
         timestamps = file1.split('.Pol')[0] + '.timestamp'
-        return [timestamps, [file1, file2]]
+        return (timestamps, [file1, file2])
 
 
 class observation(dict):

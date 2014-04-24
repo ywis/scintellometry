@@ -47,7 +47,6 @@ def reduce(telescope, obskey, tstart, tend, nchan, ngate, ntbin, ntw_min,
     if telescope == 'kairo':
         raise ValueError("Kairo not yet set up!")
     elif telescope == 'lofar':
-        GenericOpen = LOFARdata
         GenericOpen = LOFARdata_Pcombined
     elif telescope == 'gmrt':
         GenericOpen = GMRTdata
@@ -131,10 +130,10 @@ def reduce(telescope, obskey, tstart, tend, nchan, ngate, ntbin, ntw_min,
                     .format(savepref, tstart.isot, dt.sec), waterfall)
 
     if do_foldspec:
-        foldspec = np.zeros_like(myfoldspec)
+        foldspec = np.zeros_like(myfoldspec) if comm.rank == 0 else None
         comm.Reduce(myfoldspec, foldspec, op=MPI.SUM, root=0)
         del myfoldspec  # save memory on node 0
-        icount = np.zeros_like(myicount)
+        icount = np.zeros_like(myicount) if comm.rank == 0 else None
         comm.Reduce(myicount, icount, op=MPI.SUM, root=0)
         del myicount  # save memory on node 0
         if comm.rank == 0:
@@ -143,8 +142,12 @@ def reduce(telescope, obskey, tstart, tend, nchan, ngate, ntbin, ntw_min,
             iname = ("{0}icount_{1}+{2:08}sec.npy")
             np.save(iname.format(savepref, tstart.isot, dt.sec), icount)
 
+    if comm.rank == 0:
+        if do_foldspec and foldspec.ndim == 3:
+            # sum over time slices -> pulse profile vs channel
             foldspec1 = normalize_counts(foldspec.sum(0).astype(np.float64),
                                          icount.sum(0).astype(np.int64))
+            # sum over channels -> pulse profile vs time
             foldspec3 = normalize_counts(foldspec.sum(1).astype(np.float64),
                                          icount.sum(1).astype(np.int64))
             fluxes = foldspec1.sum(axis=0)
@@ -156,13 +159,12 @@ def reduce(telescope, obskey, tstart, tend, nchan, ngate, ntbin, ntw_min,
             if ntbin*ngate < 10000:
                 foldspec2 = normalize_counts(foldspec, icount)
 
-    plots = True
-    if plots and comm.rank == 0:
-        if do_waterfall:
+        plots = True
+        if plots and do_waterfall and waterfall.ndim == 2:  # no polarizations
             w = waterfall.copy()
             pmap('{0}waterfall_{1}+{2:08}sec.pgm'
                  .format(savepref, tstart.isot, dt.sec), w, 1, verbose=True)
-        if do_foldspec:
+        if plots and do_foldspec and foldspec.ndim == 3:
             pmap('{0}folded_{1}+{2:08}sec.pgm'
                  .format(savepref, tstart.isot, dt.sec), foldspec1, 0, verbose)
             pmap('{0}folded3_{1}+{2:08}sec.pgm'
