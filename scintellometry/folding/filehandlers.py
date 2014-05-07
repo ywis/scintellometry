@@ -421,14 +421,14 @@ class LOFARdata(MultiFile):
                                 .attrs['AXIS_VALUES_WORLD'] * u.Hz).to(u.MHz)
             fwidth = b0.attrs['SUBBAND_WIDTH']
             samplerate = b0.attrs['SAMPLING_RATE']
-            if string_key_ok:
+            try:
                 self.time0 = Time(s0.attrs['EXPTIME_START_UTC']
                                   .replace('Z',''), scale='utc')
                 self.fwidth = u.Quantity(
                     fwidth, b0.attrs['CHANNEL_WIDTH_UNIT']).to(u.MHz)
                 self.samplerate = u.Quantity(
                     samplerate, b0.attrs['SAMPLING_RATE_UNIT']).to(u.MHz)
-            else:
+            except KeyError:
                 time0 = Time(s0.attrs['EXPTIME_START_MJD'], format='mjd',
                              scale='utc', precision=3)
                 # should start on whole minute
@@ -541,8 +541,8 @@ class LOFARdata_Pcombined(MultiFile):
         A list of tuples, to be 'concatenated' together
         (as returned by observations.obsdata[telescope].file_list(obskey) )
         """
+        self.per_channel_blocksize = kwargs.pop('blocksize', 2**18)
         super(LOFARdata_Pcombined, self).__init__(raw_files_list, comm=comm)
-        self.per_channel_blocksize = kwargs.pop('blocksize', 2**22)
         self.fbottom = self.frequencies[0]
         self.fedge = self.frequencies[0]
         self.fedge_at_top = False
@@ -690,8 +690,8 @@ class GMRTdata(MultiFile):
         self.indices, self.timestamps, self.gsb_start = read_timestamp_file(
             timestamp_file, utc_offset)
         self.time0 = self.timestamps[0]
-        # GMRT time is off by one 32MB record
-        self.time0 -= (2.**25/samplerate).to(u.s)
+        # GMRT time is off by one 32MB record ---- remove for now
+        # self.time0 -= (2.**25/samplerate).to(u.s)
 
         self.dtsample = (nchan * 2 / samplerate).to(u.s)
         if comm.rank == 0:

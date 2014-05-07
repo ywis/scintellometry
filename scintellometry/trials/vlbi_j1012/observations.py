@@ -10,7 +10,7 @@ from numpy import argmin
 import re
 from astropy import units as u
 from astropy.coordinates import ICRS
-from astropy.time import Time
+from astropy.time import Time, TimeDelta
 
 from astropy.extern.configobj_py2.configobj import ConfigObj
 from astropy.utils.data import get_pkg_data_filename
@@ -147,10 +147,42 @@ class observation(dict):
         elif not isinstance(phasepol, Polynomial):
             from pulsar.predictor import Polyco
 
+            class PolycoPhasepol(object):
+                """Polyco wrapper that will get phase relative to some
+                reference time0, picking the appropriate polyco chunk."""
+                def __init__(self, polyco_file, time0, rphase, time_unit,
+                             convert):
+                    self.polyco = Polyco(polyco_file)
+                    self.time0 = time0
+                    self.rphase = rphase
+                    self.time_unit = time_unit
+                    self.convert = convert
+
+                def __call__(self, dt):
+                    """Get phases for time differences dt (float in seconds)
+                    relative to self.time0 (filled by initialiser).
+
+                    Chunks are assumed to be sufficiently closely spaced that
+                    one can get the index into the polyco table from the
+                    first item.
+                    """
+                    try:
+                        dt0 = dt[0]
+                    except IndexError:
+                        dt0 = dt
+
+                    time0 = self.time0 + TimeDelta(dt0, format='sec')
+                    phasepol = self.polyco.phasepol(
+                        time0, rphase=self.rphase, t0=time0,
+                        time_unit=self.time_unit, convert=self.convert)
+                    return phasepol(dt-dt0)
+
             polyco_file = get_pkg_data_filename(phasepol)
-            polyco = Polyco(polyco_file)
-            phasepol = polyco.phasepol(time0, rphase=rphase, t0=time0,
-                                       time_unit=u.second, convert=True)
+            # polyco = Polyco(polyco_file)
+            # phasepol = polyco.phasepol(time0, rphase=rphase, t0=time0,
+            #                            time_unit=u.second, convert=True)
+            phasepol = PolycoPhasepol(polyco_file, time0, rphase=rphase,
+                                      time_unit=time_unit, convert=convert)
         return phasepol
 
 

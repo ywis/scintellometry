@@ -161,8 +161,7 @@ def fold(fh, comm, samplerate, fedge, fedge_at_top, nchan,
     ifreq = freq.ravel().argsort()
 
     # pre-calculate time offsets in (input) channelized streams
-    dt = (dispersion_delay_constant * dm *
-          (1./freq_in**2 - 1./fref**2)).to(u.s).value
+    dt = dispersion_delay_constant * dm * (1./freq_in**2 - 1./fref**2)
 
     if dedisperse in ['coherent', 'by-channel']:
         # pre-calculate required turns due to dispersion
@@ -302,27 +301,29 @@ def fold(fh, comm, samplerate, fedge, fedge_at_top, nchan,
                 print("... waterfall", end="")
 
         if do_foldspec:
-            # times since start
-            tsample = (tstart + isr*dtsample*oversample).value
             ibin = (j*ntbin) // nt  # bin in the time series: 0..ntbin-1
 
-            for k, kfreq in enumerate(ifreq):  # sort in frequency while at it
-                if dedisperse == 'coherent':
-                    t = tsample  # already dedispersed
-                elif dedisperse in ['incoherent', 'by-channel']:
-                    t = tsample - dt[kfreq // oversample]  # dedisperse
-                elif dedisperse is None:
-                    t = tsample  # do nothing
+            # times since start
+            tsample = (tstart + isr*dtsample*oversample)[:, np.newaxis]
+            # correct for delay if needed
+            if dedisperse in ['incoherent', 'by-channel']:
+                # tsample.shape=(ntint/oversample, nchan_in)
+                tsample = tsample - dt
 
-                phase = phasepol(t)  # corresponding PSR phases
-                iphase = np.remainder(phase*ngate,
-                                      ngate).astype(np.int)
+            phase = (phasepol(tsample.to(u.s).value.ravel())
+                     .reshape(tsample.shape))
+            # corresponding PSR phases
+            iphase = np.remainder(phase*ngate, ngate).astype(np.int)
+
+            for k, kfreq in enumerate(ifreq):  # sort in frequency while at it
+                iph = iphase[:, (0 if iphase.shape[1] == 1
+                                 else kfreq // oversample)]
                 # sum and count samples by phase bin
                 for ipow in xrange(npol**2):
                     foldspec[ibin, k, :, ipow] += np.bincount(
-                        iphase, power[:, kfreq, ipow], ngate)
+                        iph, power[:, kfreq, ipow], ngate)
                 icount[ibin, k, :] += np.bincount(
-                    iphase, power[:, kfreq, 0] != 0., ngate)
+                    iph, power[:, kfreq, 0] != 0., ngate)
 
             if verbose >= 2:
                 print("... folded", end="")
