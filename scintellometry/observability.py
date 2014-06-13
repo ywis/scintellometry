@@ -192,14 +192,21 @@ b2116 = BinaryPulsar('21h13m24.307s +46d44m08.70s', name='B2116')
 
 b0809 = BinaryPulsar('08h14m59.500s +74d29m05.70s', name='B0809')
 
+b0834 = BinaryPulsar('08h37m05.642s +06d10m14.56s', name='B0834')
+
 b1133 = BinaryPulsar('11h36m03.180s +15d51m09.62s', name='B1133')
+
+b1237 = BinaryPulsar('12h39m40.4614s +24d53m49.29s', name='B1237')
+
+b1702 = BinaryPulsar('17h05m36.099s -19d06m38.6s', name='B1702')
+
 
 if __name__ == '__main__':
     print('Source Obs.             HA  LocSidTime UnivSidTime')
-    for src in j1810, b1957, b0809, j1012, b1133:
+    for src in b1957, b0834, crab, b1237, b1702:
         gmststart = -100. * u.hourangle
         gmststop = +100. * u.hourangle
-        for obs in gmrt, lofar, aro:
+        for obs in jodrell, aro:
         # for obs in gbt, ao, wsrt:
             hamax = getattr(obs, 'hamax', None)
             if hamax is None:
@@ -244,9 +251,9 @@ if __name__ == '__main__':
             #ist_date2 = '2013-07-03 12:00:00'
             #ist_date1 = '2013-07-24 12:00:00'
             #ist_date2 = '2013-07-29 12:00:00'
-            ist_date1 = '2014-01-18 12:00:00'
-            ist_date2 = '2014-01-23 12:00:00'
-            ist_utc = 5.5/24.
+            ist_date1 = '2014-06-12 12:00:00'
+            ist_date2 = '2014-06-18 12:00:00'
+            ist_utc = 0*5.5/24.
             mjd1 = Time(ist_date1, scale='utc').mjd-ist_utc
             mjd2 = Time(ist_date2, scale='utc').mjd-ist_utc
             for mjd in np.arange(mjd1, mjd2+1.e-5):
