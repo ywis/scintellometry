@@ -1,0 +1,73 @@
+PSRJ            J0700+6418
+PSRB            B0655+64
+NAME            B0655+64
+RAJ             07:00:37.802             4.000e-03
+DECJ            +64:18:11.20             4.000e-02
+ELONG           98.68
+ELAT            41.32
+DM              8.771                    5.000e-03
+PEPOCH          48806.00
+F0              5.110620788131           4.000e-12
+F1              -1.790E-17               3.000e-20
+P0              0.19567094516627         1.600e-13
+P1              6.853E-19                1.200e-21
+DIST_DM         0.48
+DIST_DM1        0.49
+SURVEY          gb1,gb2
+S400            5                        1.000e+00
+S1400           0.3                      1.000e-01
+W50             6.0
+W10             10.0
+POSEPOCH        48806.00
+DMEPOCH         48806.00
+F2              -5.6E-29                 4.000e-28
+BINARY          BT
+PB              1.028669703              1.000e-09
+ECC             0.0000075                1.100e-06
+A1              4.125612                 5.000e-06
+T0              46066.77                 3.000e-02
+OM              276                      9.000e+00
+S600            2.1                      5.000e-01
+BINCOMP         CO[kul86]
+AGE             4.52e+09
+SPINDX          -2.1                     2.000e-01
+RM              -7                       6.000e+00
+S900            2                        1.000e+00
+FB0             1.1251496997E-5          1.100e-14
+PMELONG         -6                       5.000e+00
+DATE            1978
+DIST            0.48
+DIST1           0.49
+PMERR_PA        63.225
+P1_I            6.63e-19
+AGE_I           4.68e+09
+BSURF_I         1.15e+10
+EDOT_I          3.49e+30
+EDOTD2          1.6e+31
+R_LUM           1.15
+R_LUM14         0.07
+PMTOT           10                       8.000e+00
+VTRANS          22.76
+BSURF           1.17e+10
+B_LC            1.47e+01
+SI414           2.25
+EDOT            3.6e+30
+RAJD            105.15751
+DECJD           64.30311
+OSURVEY         0000000060
+MASSFN            0.071252
+MINMASS           0.660361
+MEDMASS           0.796588
+DMSINB          3.74
+GL              151.55
+GB              25.24
+PMELAT          -8                       8.000e+00
+XX              0.21
+YY              8.88
+ZZ              0.20
+PML             -0.9                     6.700e+00
+PMB             -10                      7.000e+00
+UPRMASS           2.201320
+MINOMDOT             0.302
+EPHVER          2
+UNITS           TDB

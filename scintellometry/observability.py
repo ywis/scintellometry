@@ -203,7 +203,7 @@ b1702 = BinaryPulsar('17h05m36.099s -19d06m38.6s', name='B1702')
 
 if __name__ == '__main__':
     print('Source Obs.             HA  LocSidTime UnivSidTime')
-    for src in b1957, b0834, crab, b1237, b1702:
+    for src in b1957, b0834, b1133, b1237, b1702:
         gmststart = -100. * u.hourangle
         gmststop = +100. * u.hourangle
         for obs in jodrell, aro:
