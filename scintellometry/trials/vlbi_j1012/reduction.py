@@ -6,8 +6,7 @@ from astropy.time import Time, TimeDelta
 
 from scintellometry.folding.fold import Folder, normalize_counts
 from scintellometry.folding.pmap import pmap
-from scintellometry.folding.filehandlers import (LOFARdata, AROdata,
-                                                 LOFARdata_Pcombined, GMRTdata)
+from scintellometry.io import AROdata, LOFARdata_Pcombined, GMRTdata
 
 from observations import obsdata
 

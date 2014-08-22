@@ -4,11 +4,10 @@ import argparse
 import numpy as np
 from astropy.time import Time
 
-from scintellometry.folding.fold import Folder, normalize_counts
+from scintellometry.folding.fold import normalize_counts
 from scintellometry.folding.pmap import pmap
 from scintellometry.folding import correlate
-from scintellometry.folding.filehandlers import (AROdata, LOFARdata_Pcombined,
-                                                 GMRTdata)
+from scintellometry.io import AROdata, LOFARdata_Pcombined, GMRTdata
 
 from observations import obsdata
 
@@ -206,6 +205,6 @@ if __name__ == '__main__':
     main_correlate(args.tel1, args.date1, args.tel2, args.date2, args.nchan,
                    args.starttime, args.endtime, args.dedisperse,
                    args.do_foldspec, args.ntbin, args.ngate,
-                   args.do_waterfall, args.ntw_min, 
+                   args.do_waterfall, args.ntw_min,
                    args.save_xcorr,
                    args.verbose)
