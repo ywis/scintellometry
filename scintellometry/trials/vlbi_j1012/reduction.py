@@ -6,7 +6,7 @@ from astropy.time import Time, TimeDelta
 
 from scintellometry.folding.fold import Folder, normalize_counts
 from scintellometry.folding.pmap import pmap
-from scintellometry.io import AROdata, LOFARdata_Pcombined, GMRTdata
+from scintellometry.io import AROdata, LOFARdata_Pcombined, GMRTdata, AROCHIMEData
 
 from observations import obsdata
 
@@ -51,6 +51,8 @@ def reduce(telescope, obskey, tstart, tend, nchan, ngate, ntbin, ntw_min,
         GenericOpen = GMRTdata
     elif telescope == 'aro':
         GenericOpen = AROdata
+    elif telescope =='arochime':
+        GenericOpen = AROCHIMEData
 
     if verbose and comm.rank == 0:
         print("Attempting to open files {0}".format(files))
@@ -212,7 +214,7 @@ def CL_parser():
         formatter_class=argparse.ArgumentDefaultsHelpFormatter)
     parser.add_argument(
         '--reduction_defaults', type=str,
-        help="One of ['aro', 'lofar', 'gmrt'].\n"
+        help="One of ['aro', 'lofar', 'gmrt', 'arochime'].\n"
         "A convenience flag to set default parameters as defined at the "
         "end of reduce_data.py (TO DO: make dicts)")
 
@@ -223,7 +225,7 @@ def CL_parser():
         "in observations.conf), and the start and finish timestamps.")
     d_parser.add_argument(
         '-t','--telescope', type=str, default='gmrt',
-        help="The data to reduce. One of ['gmrt', 'kairo', 'lofar'].")
+        help="The data to reduce. One of ['gmrt', 'kairo', 'lofar', 'arochime'].")
     d_parser.add_argument(
         '-d','--date','--observation', type=str, default='2014-01-19T22:22:48',
         help="The date or other identifier of the data to reduce. "
