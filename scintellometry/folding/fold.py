@@ -133,7 +133,7 @@ def fold(fh, comm, samplerate, fedge, fedge_at_top, nchan,
     if fh.telescope == 'lofar':
         dtsample = fh.dtsample
     else:
-        dtsample = nchan * 2 * dt1
+        dtsample = nchan // oversample * 2 * dt1
     tstart = dtsample * ntint * nskip
 
     # pre-calculate time delay due to dispersion in coarse channels
@@ -144,7 +144,7 @@ def fold(fh, comm, samplerate, fedge, fedge_at_top, nchan,
             # for complex data, really each complex sample consists of
             # 2 real ones, so multiply dt1 by 2.
             if fedge_at_top:
-                freq = fedge - fftfreq(nchan, 2.*dt1.value) * u.Hz             
+                freq = fedge - fftfreq(nchan, 2.*dt1.value) * u.Hz
             else:
                 freq = fedge + fftfreq(nchan, 2.*dt1.value) * u.Hz
         else:
