@@ -8,7 +8,7 @@ msblsb_bits = np.array([-16, 15], np.int8)
 twopiby256 = 2.*np.pi / 256.
 
 NP_DTYPES = {'1bit': 'i1', '4bit': 'i1', 'nibble': 'i1',
-             'ci1': '2i1', 'ci1,ci1': '2i1,2i1', 'cu4bit,cu4bit': '2u1'}
+             'ci1': '2i1', 'ci1,ci1': '4i1', 'cu4bit,cu4bit': '2u1'}
 
 
 def fromfile(file, dtype, count, verbose=False):
