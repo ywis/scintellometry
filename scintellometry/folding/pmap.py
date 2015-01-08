@@ -31,7 +31,7 @@ def pmap(fn, data, iscale=0, rmin=None, rmax=None, verbose=False):
     if verbose:
         print('Contructing {0}; min,max={1},{2}'.format(fn, rmin, rmax))
 
-    imap = np.uint8(255*(rmap-rmin)/(rmax-rmin))
+    imap = np.uint8(255*np.clip((rmap-rmin)/(rmax-rmin), 0., 1.))
     f = open(fn, 'wb')
     pgmHeader = 'P5\n{0:12d}{1:12d}\n{2:12d}\n'.format(rmap.shape[0],
                                                        rmap.shape[1], 255)

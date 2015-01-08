@@ -6,12 +6,12 @@ nn = n / n_median[:, np.newaxis] - 1.
 
 profile = n[200:350].sum(0)
 profile = profile / np.median(profile) -1.
-profile[profile < 0.] = 0.
-profile /= profile.sum()
+profile0 = np.where(profile < 0., 0., profile)
+profile0 /= profile0.sum()
 
 nt = f[..., (0,3)].sum(-1) / ic
 
-dyn = ((nt / np.median(nt, axis=2)[..., np.newaxis] - 1.) * profile).sum(-1)
+dyn = ((nt / np.median(nt, axis=2)[..., np.newaxis] - 1.) * profile0).sum(-1)
 vmin = dyn.mean() - 1*dyn.std()
 vmax = dyn.mean() + 5*dyn.std()
 

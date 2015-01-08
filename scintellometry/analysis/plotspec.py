@@ -4,6 +4,9 @@ import sys
 import numpy as np
 import matplotlib.pylab as plt
 
+time_slice = slice(None)  # use all time samples
+pol_select = (0, 3)
+
 if __name__ == "__main__":
     if len(sys.argv) < 2:
         print "Usage: %s foldspec icounts" % sys.argv[0]
@@ -17,11 +20,11 @@ if __name__ == "__main__":
 
     # Sum over the time axis, and over XX, YY if polarization data is present
     if f.shape[-1] == 4:
-        n = f[..., (0,3)].sum(-1).sum(0)
+        n = f[time_slice, ..., pol_select].sum(-1).sum(0)
     else:
         n = f.sum(0)
 
-    n /= ic.sum(0)
+    n /= ic[time_slice].sum(0)
     # normalize by median flux in a given frequency bin
     n_median = np.median(n, axis=1)
     nn = n / n_median[:, np.newaxis] - 1.
