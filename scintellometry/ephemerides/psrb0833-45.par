@@ -1,0 +1,65 @@
+PSRJ            J0835-4510
+PSRB            B0833-45
+NAME            B0833-45
+RAJ             08:35:20.61149           2.000e-05
+DECJ            -45:10:34.8751           3.000e-04
+ELONG           153.37
+ELAT            -60.36
+DM              67.99                    1.000e-02
+PEPOCH          51559.319
+F0              11.1946499395            5.000e-10
+F1              -1.5666E-11              2.000e-15
+P0              0.089328385024           4.000e-12
+P1              1.25008E-13              1.600e-17
+DIST_DM         0.61
+DIST_DM1        0.24
+SURVEY          mol1,mol2,pks70,pksmb,htr
+PMRA            -49.68                   6.000e-02
+PMDEC           29.9                     1.000e-01
+S400            5000
+S1400           1100
+W50             2.1
+W10             4.5
+POSEPOCH        51544
+DMEPOCH         51559.32
+F2              1.028E-21                1.000e-24
+DIST_AMN        0.26
+DIST_AMX        0.30
+DIST_A          0.28
+ASSOC           SNR:Vela,GRS:2FGL_J0835.3
+AGE             1.13e+04
+RM              31.38                    1.000e-02
+TAU_SC          6.03e-05
+PX              3.5                      2.000e-01
+TYPE            HE[hg73,tfko75]
+NGLT            17
+DATE            1968
+DIST            0.28
+DIST1           0.28
+PMERR_PA        101.825
+P1_I            1.25e-13
+AGE_I           1.13e+04
+BSURF_I         3.38e+12
+EDOT_I          6.92e+36
+EDOTD2          8.8e+37
+R_LUM           392.00
+R_LUM14         86.24
+PMTOT           57.98                    8.000e-02
+VTRANS          76.97
+BSURF           3.38e+12
+B_LC            4.45e+04
+SI414           1.21
+EDOT            6.9e+36
+RAJD            128.83588
+DECJD           -45.17635
+OSURVEY         0010044011
+DMSINB          -3.31
+GL              263.55
+GB              -2.79
+XX              -0.28
+YY              8.53
+ZZ              -0.01
+PML             -42.22                   9.000e-02
+PMB             -17.16                   8.000e-02
+EPHVER          2
+UNITS           TDB
