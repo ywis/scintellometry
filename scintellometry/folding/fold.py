@@ -195,26 +195,25 @@ def fold(fh, comm, samplerate, fedge, fedge_at_top, nchan,
         # add dimension for polarisation
         dd_coh = dd_coh[..., np.newaxis]
 
-    #for j in xrange(mpi_rank, nt, mpi_size):
+    # Calculate the part of the whole file this node should handle.
     size_per_node = (nt-1)//mpi_size + 1
-    for j in xrange(mpi_rank*size_per_node,
-                    min((mpi_rank+1)*size_per_node, nt)):
+    start_block = mpi_rank*size_per_node
+    end_block = min((mpi_rank+1)*size_per_node, nt)
+    for j in range(start_block, end_block):
         if verbose and j % progress_interval == 0:
-            print('#{:4d}/{:4d} is doing {:6d}/{:6d}; time={:18.12f}'.format(
-                mpi_rank, mpi_size, j+1, nt,
-                (tstart+dtsample*j*ntint).value))  # time since start
+            print('#{:4d}/{:4d} is doing {:6d}/{:6d} [={:6d}/{:6d}]; '
+                  'time={:18.12f}'
+                  .format(mpi_rank, mpi_size, j+1, nt,
+                          j-start_block+1, end_block-start_block,
+                          (tstart+dtsample*j*ntint).value))  # time since start
 
-        # just in case numbers were set wrong -- break if file ends
-        # better keep at least the work done
+        # Just in case numbers were set wrong -- break if file ends;
+        # better keep at least the work done.
         try:
-            # ARO/GMRT return int-stream,
-            # LOFAR returns complex64 (count/nchan, nchan)
-            # LOFAR "combined" file class can do lots of seeks, we minimize
-            # that with the 'seek_record_read' routine
             raw = fh.seek_record_read(int((nskip+j)*fh.blocksize),
                                       fh.blocksize)
         except(EOFError, IOError) as exc:
-            print("Hit {0!r}; writing pgm's".format(exc))
+            print("Hit {0!r}; writing data collected.".format(exc))
             break
         if verbose >= 2:
             print("#{:4d}/{:4d} read {} items"
