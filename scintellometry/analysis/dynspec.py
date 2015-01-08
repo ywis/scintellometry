@@ -1,14 +1,23 @@
 import numpy as np
 
-f2_03 = f2[...,(0,3)].sum(-1)
-f2_cln = f2_03[:80]
-ic_cln = ic[:80]
+n = f.sum(0)[..., (0,3)].sum(-1) / ic.sum(0)
+n_median = np.median(n, axis=1)
+nn = n / n_median[:, np.newaxis] - 1.
 
-f = f2_cln.sum(0)/ic_cln.sum(0)
-ok = f.std(1) < 0.003
+profile = n[200:350].sum(0)
+profile = profile / np.median(profile) -1.
+profile[profile < 0.] = 0.
+profile /= profile.sum()
 
-prof = (f2_cln * ok[:, np.newaxis]).sum((0,1))/ic_cln.sum((0,1))
-prof -= prof.min()
+nt = f[..., (0,3)].sum(-1) / ic
 
-tall = f2_cln/ic_cln
-dyn = ((tall-tall.min(-1, keepdims=True))*prof).sum(-1)/prof.sum()
+dyn = ((nt / np.median(nt, axis=2)[..., np.newaxis] - 1.) * profile).sum(-1)
+vmin = dyn.mean() - 1*dyn.std()
+vmax = dyn.mean() + 5*dyn.std()
+
+plt.imshow(dyn.T, aspect='auto', interpolation='nearest', origin='lower',
+           cmap=plt.get_cmap('binary'), vmin=vmin, vmax=vmax,
+           extent=(0., 37., 200., 400.))
+plt.xlabel('t (min)')
+plt.ylabel('f (MHz)')
+plt.title('PSR B1957')
