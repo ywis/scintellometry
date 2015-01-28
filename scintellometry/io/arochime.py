@@ -39,17 +39,20 @@ class AROCHIMEData(MultiFile):
         self.fedge = fedge
         self.fedge_at_top = fedge_at_top
         f = fftshift(fftfreq(nchan, (2./samplerate).to(u.s).value)) * u.Hz
-        if fedge_at_top:
+        if fedge_at_top :
             self.frequencies = fedge - (f-f[0])
+            if self.time0.value > 1406764800  and self.time0.value < 1406937600:
             ### reset these for just july run when we swapped a cable
-            initfreqar = fedge - (f-f[0])
-            newind = np.zeros(1024,dtype=int)
-            iar = [4,5,6,7,0,1,2,3]
-            for i in range(0,128):
-                for j in range(0,8):
-                   newind[i*8 + j] = int(i*8 + iar[j])
-            self.frequencies = initfreqar[newind]
-        else:
+            	initfreqar = fedge - (f-f[0])
+            	newind = np.zeros(1024,dtype=int)
+            	iar = [4,5,6,7,0,1,2,3]
+            	for i in range(0,128):
+                    for j in range(0,8):
+                        newind[i*8 + j] = int(i*8 + iar[j])
+            	self.frequencies = initfreqar[newind]
+            else:
+		pass
+	else:
             self.frequencies = fedge + (f-f[0])
 
         self.dtsample = (nchan * 2 / samplerate).to(u.s)
